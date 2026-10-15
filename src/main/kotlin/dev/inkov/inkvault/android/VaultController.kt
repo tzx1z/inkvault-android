@@ -22,17 +22,23 @@ import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.Executors
 import javax.net.ssl.SSLException
+import org.jivesoftware.smack.ConnectionConfiguration.DnssecMode
 import org.jivesoftware.smack.ConnectionConfiguration.SecurityMode
 import org.jivesoftware.smack.ConnectionListener
+import org.jivesoftware.smack.SmackConfiguration
 import org.jivesoftware.smack.SmackException
 import org.jivesoftware.smack.android.AndroidSmackInitializer
 import org.jivesoftware.smack.provider.ProviderManager
 import org.jivesoftware.smack.sasl.SASLErrorException
 import org.jivesoftware.smack.tcp.XMPPTCPConnection
 import org.jivesoftware.smack.tcp.XMPPTCPConnectionConfiguration
+import org.jivesoftware.smack.util.DNSUtil
+import org.jivesoftware.smack.util.dns.minidns.MiniDnsResolver
+import org.jivesoftware.smack.util.rce.RemoteConnectionEndpointLookupFailure
 import org.jivesoftware.smackx.pep.PepManager
 import org.json.JSONArray
 import org.json.JSONObject
+import org.minidns.dnsname.DnsName
 import uniffi.inkvault_uniffi.AccountSync
 import uniffi.inkvault_uniffi.VaultAccount
 import uniffi.inkvault_uniffi.VaultSync
@@ -68,6 +74,26 @@ private fun describe(e: Throwable): String = when {
     e is SmackException.EndpointConnectionException && e.connectionExceptions.isEmpty() -> "адрес сервера не найден"
     generateSequence<Throwable>(e) { it.cause }.any { it is SSLException } -> "не удалось установить защищенное соединение"
     else -> "сервер недоступен"
+}
+
+// MiniDNS не проходит CNAME в цели SRV и возвращает пустой список. Smack делает из него точку подключения
+// без адресов, и assert в XMPPTCPConnection завершает подключение с AssertionError (assert включен в debug-сборке).
+// Системный резолвер CNAME проходит; null вместо пустого списка - Smack такую точку не создает
+private class SystemFallbackResolver : MiniDnsResolver() {
+    override fun lookupHostAddress0(
+        name: DnsName,
+        lookupFailures: MutableList<RemoteConnectionEndpointLookupFailure>,
+        dnssecMode: DnssecMode,
+    ): List<InetAddress>? {
+        val found = super.lookupHostAddress0(name, lookupFailures, dnssecMode)
+        if (!found.isNullOrEmpty()) return found
+        return try {
+            InetAddress.getAllByName(name.ace).toList()
+        } catch (e: UnknownHostException) {
+            lookupFailures.add(RemoteConnectionEndpointLookupFailure.DnsLookupFailure(name, e))
+            null
+        }
+    }
 }
 
 /**
@@ -126,6 +152,10 @@ class VaultController(private val context: Context) {
 
     init {
         AndroidSmackInitializer.initialize(context)
+        // первое обращение к SmackConfiguration запускает инициализацию Smack, которая регистрирует
+        // MiniDnsResolver: свой резолвер ставится после нее, иначе инициализация его заменит
+        SmackConfiguration.getVersion()
+        DNSUtil.setDNSResolver(SystemFallbackResolver())
         ProviderManager.addExtensionProvider("entry", NS_VAULT, EntryProvider())
         screen = if (store.account() != null) Screen.Unlock else Screen.Login
         biometricEnabled = Biometric.supported && store.device() != null

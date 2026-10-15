@@ -285,6 +285,8 @@ def main() -> int:
     tap("create")
     report(wait("new", timeout=60) is not None, "хранилище создано, открыт список")
     report(wait(text="в сети", timeout=30) is not None, "клиент в сети")
+    account = field_text("account")
+    report(account == "alice@vault.test", "JID учетной записи в заголовке", account)
 
     tap("new")
     type_into("f-name", "github.com")

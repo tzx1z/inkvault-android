@@ -330,7 +330,14 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("InkVault")
+                        // JID вместо названия приложения: третья строка не помещается в высоту панели.
+                        // Многоточие в середине оставляет видимыми и имя, и сервер
+                        Text(
+                            controller.settings?.jid.orEmpty(),
+                            maxLines = 1,
+                            overflow = TextOverflow.MiddleEllipsis,
+                            modifier = Modifier.tag("account"),
+                        )
                         // tertiary из палитры темы: заметнее статуса и сочетается с остальными цветами
                         val pendingColor = MaterialTheme.colorScheme.tertiary
                         val status = buildAnnotatedString {
