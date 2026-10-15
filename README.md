@@ -53,7 +53,7 @@ pep_max_items = 10000
 - Rust 1.85 или новее, `cargo-ndk` и цели `aarch64-linux-android`, `x86_64-linux-android`.
 
 ```sh
-git clone --recurse-submodules https://gitlab.com/inkvault/inkvault-android.git
+git clone --recurse-submodules git@gitlab.com:inkvault/inkvault-android.git
 cd inkvault-android
 
 rustup target add aarch64-linux-android x86_64-linux-android
@@ -65,6 +65,8 @@ adb install build/outputs/apk/debug/inkvault-android-debug.apk
 ```
 
 Путь к Android SDK задается в `local.properties` (`sdk.dir=...`) или переменной `ANDROID_HOME`.
+
+Пока репозитории `inkvault-android` и `inkvault-core` на GitLab закрыты, клонирование идет по SSH-ключу, добавленному в GitLab. В CI подходит deploy key с доступом на чтение к обоим репозиториям или токен задания GitLab CI: при относительном адресе submodule GitLab загружает ядро с токеном задания, если `inkvault-android` добавлен в список доступа токена в настройках `inkvault-core` (CI/CD - Job token permissions).
 
 Обновление ядра до новой версии:
 
