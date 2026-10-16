@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const core = require("../inkvault-core/bindings/wasm/pkg/node/inkvault_wasm.js");
+const core = require("@inkov-dev/inkvault-core-wasm/node");
 const [command, path, password] = process.argv.slice(2);
 
 const engine = () => new core.VaultSync("0192a3f4-0000-7000-8000-0000000000aa", 1, core.generateKey(), "urn:inkvault:vault:0", core.generateNodeId(), 10000);

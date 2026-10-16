@@ -54,22 +54,22 @@ pep_max_items = 10000
 
 ## Сборка
 
-Ядро подключено как git submodule `inkvault-core` на теге версии и собирается из исходников. Адрес submodule относительный: если репозиторий клонирован по SSH, ядро тоже загружается по SSH, если по HTTPS - по HTTPS.
+Ядро подключено как AAR `dev.inkov.inkvault:inkvault-core-android` из реестра пакетов GitLab группы `inkvault`, его публикует CI проекта `inkvault-core`. Версия ядра задана в `build.gradle.kts`.
 
 Нужны:
 
 - JDK 17 (Gradle 9.7.1 скачивает `./gradlew` при первом запуске, контрольная сумма дистрибутива зафиксирована в `gradle/wrapper/gradle-wrapper.properties`);
-- Android SDK с платформой 37, Android NDK 26 (`ANDROID_NDK_HOME`, по умолчанию `~/Android/Sdk/ndk/26.1.10909125`);
-- Rust 1.85 или новее, `cargo-ndk` и цели `aarch64-linux-android`, `x86_64-linux-android`.
+- Android SDK с платформой 37;
+- токен GitLab в `~/.gradle/gradle.properties`: personal access token со scope `read_api` или deploy token со scope `read_package_registry`. В CI вместо него используется токен задания:
+
+```
+gitlabToken=<токен>
+```
 
 ```sh
-git clone --recurse-submodules git@gitlab.com:inkvault/inkvault-android.git
+git clone git@gitlab.com:inkvault/inkvault-android.git
 cd inkvault-android
 
-rustup target add aarch64-linux-android x86_64-linux-android
-cargo install cargo-ndk
-
-inkvault-core/bindings/build.sh android    # Kotlin-биндинги и библиотеки ядра
 ./gradlew assembleDebug                    # build/outputs/apk/debug/inkvault-android-debug.apk
 adb install build/outputs/apk/debug/inkvault-android-debug.apk
 ```
@@ -89,7 +89,6 @@ keystore.alias=inkvault
 Путь к ключу абсолютный, `~` не раскрывается. Пароль хранилища и ключа один и тот же: в PKCS12 они совпадают. Без `signing.properties` получается неподписанный APK, при неполном файле сборка останавливается с ошибкой. Права на файл - `600`.
 
 ```sh
-inkvault-core/bindings/build.sh android
 ./gradlew assembleRelease                  # build/outputs/apk/release/inkvault-android-release.apk
 apksigner verify --print-certs build/outputs/apk/release/inkvault-android-release.apk
 ```
@@ -108,29 +107,32 @@ keytool -genkeypair -keystore ~/.keystores/inkvault-release.p12 -storetype PKCS1
     -dname "CN=Evgeny Inkov, EMAILADDRESS=me@inkov.dev, O=InkVault"
 ```
 
-Пока репозитории `inkvault-android` и `inkvault-core` на GitLab закрыты, клонирование идет по SSH-ключу, добавленному в GitLab. В CI подходит deploy key с доступом на чтение к обоим репозиториям или токен задания GitLab CI: при относительном адресе submodule GitLab загружает ядро с токеном задания, если `inkvault-android` добавлен в список доступа токена в настройках `inkvault-core` (CI/CD - Job token permissions).
+Пока репозиторий `inkvault-android` на GitLab закрыт, клонирование идет по SSH-ключу, добавленному в GitLab. В CI ядро загружается с токеном задания, если `inkvault-android` или вся группа `inkvault` есть в списке доступа токена в настройках `inkvault-core` (CI/CD - Job token permissions).
 
-Обновление ядра до новой версии:
+Обновление ядра до новой версии: номер версии в зависимости `dev.inkov.inkvault:inkvault-core-android` в `build.gradle.kts` и в `tests/package.json`, затем `(cd tests && npm install)`.
+
+Сборка с неопубликованным ядром из соседнего каталога `../inkvault-core`:
 
 ```sh
-git -C inkvault-core fetch --tags
-git -C inkvault-core checkout v0.2.0
-git add inkvault-core
+(cd ../inkvault-core && bindings/build.sh android && cd bindings/uniffi/android && ./gradlew publishToMavenLocal)
+./gradlew assembleDebug -PinkvaultCoreLocal
 ```
+
+Версия ядра в `build.gradle.kts` должна совпадать с версией в `Cargo.toml` соседнего ядра.
 
 ## Тесты
 
 Сквозной тест управляет приложением на телефоне по USB через adb и uiautomator: создание хранилища, синхронизация с другим клиентом, PIN + код, экспорт и импорт, восстановление сервера, смена мастер-пароля. Тестовый сервер запускается в podman, телефон подключается к нему через `adb reverse`.
 
 ```sh
-podman build -t inkvault-test-prosody inkvault-core/testkit/prosody
-inkvault-core/bindings/build.sh wasm android
-(cd inkvault-core/testkit/vault && npm ci)
+podman login registry.gitlab.com     # один раз, токен со scope read_registry
+npm config set -- //gitlab.com/api/v4/projects/inkvault%2Finkvault-core/packages/npm/:_authToken <токен>   # один раз
+(cd tests && npm ci)                 # @inkov-dev/inkvault-testkit и ядро в WASM для Node из реестра GitLab
 ./gradlew assembleDebug
-tests/run.sh                # с --biometric - еще и разблокировка отпечатком
+tests/run.sh                         # с --biometric - еще и разблокировка отпечатком
 ```
 
-Нужны podman, Node.js 22 и `wasm-bindgen-cli` (см. README ядра). Тест очищает данные приложения на телефоне. Сценарий сверяет русские тексты интерфейса: на Android 13 и новее `run.sh` включает приложению русский язык, на более старых версиях нужен русский язык системы.
+Тестовый сервер - образ `registry.gitlab.com/inkvault/inkvault-core/test-prosody` той же версии, что и `@inkov-dev/inkvault-testkit` в `tests/package.json`. Нужны podman и Node.js 22. Тест очищает данные приложения на телефоне. Сценарий сверяет русские тексты интерфейса: на Android 13 и новее `run.sh` включает приложению русский язык, на более старых версиях нужен русский язык системы.
 
 Лицензии зависимостей APK:
 
@@ -144,7 +146,6 @@ python3 -I tools/licenses.py
 |------|------------|
 | `src/main/kotlin/dev/inkov/inkvault/android/` | приложение: экраны на Jetpack Compose, контроллер хранилища, биометрия, буфер обмена |
 | `src/main/kotlin/dev/inkov/inkvault/pep/` | адаптер PEP для движка синхронизации ядра на Smack |
-| `inkvault-core/` | ядро (git submodule) |
 | `gradlew`, `gradle/wrapper/` | Gradle Wrapper |
 | `tests/` | сквозной тест на телефоне |
 | `art/` | исходники иконки и логотипа в SVG |

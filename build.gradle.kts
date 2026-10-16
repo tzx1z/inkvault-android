@@ -72,14 +72,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets {
-        getByName("main") {
-            // ядро из submodule inkvault-core: Kotlin-биндинги и библиотеки собирает bindings/build.sh android
-            kotlin.directories.add("inkvault-core/bindings/uniffi/kotlin")
-            jniLibs.directories.add("inkvault-core/bindings/uniffi/jniLibs")
-        }
-    }
-
     packaging {
         resources {
             excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
@@ -102,5 +94,6 @@ dependencies {
     implementation("org.igniterealtime.smack:smack-tcp:4.5.0")
     implementation("org.igniterealtime.smack:smack-extensions:4.5.0")
     implementation("org.igniterealtime.smack:smack-im:4.5.0")
-    implementation("net.java.dev.jna:jna:5.19.1@aar")
+    // AAR ядра с Kotlin-биндингами и библиотеками, JNA приходит вместе с ним
+    implementation("dev.inkov.inkvault:inkvault-core-android:0.2.1")
 }

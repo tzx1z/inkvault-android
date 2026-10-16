@@ -1,7 +1,6 @@
 #!/bin/sh
-# Проверка Android-клиента на телефоне по USB. Нужны образ inkvault-test-prosody из
-# inkvault-core/testkit/prosody, inkvault-core/bindings/build.sh wasm android, npm ci
-# в inkvault-core/testkit/vault и ./gradlew assembleDebug. Ключ --biometric - проверка отпечатка.
+# Проверка Android-клиента на телефоне по USB. Нужны npm ci в tests, podman login registry.gitlab.com
+# и ./gradlew assembleDebug. Ключ --biometric - проверка отпечатка.
 set -eu
 cd "$(dirname "$0")/.."
 ADB=${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb
@@ -20,8 +19,11 @@ fi
 
 # e2e.py перезапускает и останавливает этот контейнер: восстановление на чистом сервере и сервер без связи
 export PROSODY_CONTAINER=inkvault-android-ui
+# образ тестового Prosody той же версии ядра, что и @inkov-dev/inkvault-testkit
+PROSODY_IMAGE=registry.gitlab.com/inkvault/inkvault-core/test-prosody:$(node -p 'require("./tests/node_modules/@inkov-dev/inkvault-testkit/package.json").version')
+export PROSODY_IMAGE
 podman rm -f "$PROSODY_CONTAINER" >/dev/null 2>&1 || true
-podman run -d --name "$PROSODY_CONTAINER" -p 127.0.0.1:15222:5222 -p 127.0.0.1:15280:5280 inkvault-test-prosody >/dev/null
+podman run -d --name "$PROSODY_CONTAINER" -p 127.0.0.1:15222:5222 -p 127.0.0.1:15280:5280 "$PROSODY_IMAGE" >/dev/null
 # под set -e ошибка adb reverse (телефон отключился) завершала бы ловушку раньше podman rm
 trap '"$ADB" reverse --remove tcp:15222 >/dev/null 2>&1 || true; podman rm -f "$PROSODY_CONTAINER" >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 30); do

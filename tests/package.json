@@ -1,0 +1,9 @@
+{
+  "name": "inkvault-android-tests",
+  "private": true,
+  "description": "Зависимости сквозного теста: тестовое хранилище и ядро в WASM для Node",
+  "devDependencies": {
+    "@inkov-dev/inkvault-core-wasm": "0.2.1",
+    "@inkov-dev/inkvault-testkit": "0.2.1"
+  }
+}

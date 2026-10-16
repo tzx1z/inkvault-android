@@ -26,11 +26,12 @@ NEW_MASTER = "new horse battery staple"
 WEB_MASTER = "web horse battery staple"
 TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 CONTAINER = os.environ.get("PROSODY_CONTAINER", "inkvault-android-ui")
+IMAGE = os.environ["PROSODY_IMAGE"]
 # отдельная папка: тест не листает файлы пользователя в загрузках и удаляет ее после прогона
 DOWNLOADS = "/sdcard/Download/inkvault-e2e"
 EXPORT_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "export_file.mjs")
 # тестовое хранилище из ядра: учетная запись и записи на сервере от имени другого устройства
-VAULT_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../inkvault-core/testkit/vault")
+VAULT_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "node_modules/@inkov-dev/inkvault-testkit")
 results = []
 
 
@@ -157,7 +158,7 @@ def server_has(names: tuple[str, ...], master: str = MASTER, timeout: float = 30
 def restart_server() -> None:
     """Чистый сервер: тот же образ с учетными записями XMPP, но без данных PEP."""
     subprocess.run(["podman", "rm", "-f", CONTAINER], check=True, capture_output=True)
-    subprocess.run(["podman", "run", "-d", "--name", CONTAINER, "-p", "127.0.0.1:15222:5222", "-p", "127.0.0.1:15280:5280", "inkvault-test-prosody"], check=True, capture_output=True)
+    subprocess.run(["podman", "run", "-d", "--name", CONTAINER, "-p", "127.0.0.1:15222:5222", "-p", "127.0.0.1:15280:5280", IMAGE], check=True, capture_output=True)
     for _ in range(60):
         logs = subprocess.run(["podman", "logs", CONTAINER], capture_output=True, text=True)
         if "Activated service 'c2s'" in logs.stdout + logs.stderr:
