@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- язык текстов ядра: тот же, что у ресурсов интерфейса -->
+    <string name="core_language">en</string>
     <string name="master_password">Master password</string>
     <string name="password_repeat">Password again</string>
     <string name="file_password">File password</string>

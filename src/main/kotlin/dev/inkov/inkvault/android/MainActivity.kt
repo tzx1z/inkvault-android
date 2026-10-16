@@ -6,10 +6,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import dev.inkov.inkvault.android.ui.InkVaultApp
+import uniffi.inkvault_uniffi.setLanguage
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // язык берется из ресурсов, а не из системы: при языке системы без перевода интерфейс и ядро
+        // остаются на английском. Смена языка пересоздает активность, и ядро получает новый язык
+        setLanguage(getString(R.string.core_language))
         // Android 15 включает режим edge-to-edge сам, на старых версиях он включается здесь:
         // отступы от системных панелей и цвет их значков одинаковы на всех версиях
         enableEdgeToEdge()

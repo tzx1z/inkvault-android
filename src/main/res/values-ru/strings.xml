@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="core_language">ru</string>
     <string name="master_password">Мастер-пароль</string>
     <string name="password_repeat">Пароль еще раз</string>
     <string name="file_password">Пароль файла</string>
