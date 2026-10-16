@@ -1,5 +1,6 @@
 package dev.inkov.inkvault.android
 
+import androidx.annotation.StringRes
 import org.json.JSONArray
 
 const val FAVORITE = "@favorite"
@@ -10,7 +11,12 @@ const val PASSWORD_MODE = "password_mode"
 const val PIN_TOTP = "pin_totp"
 
 // CONFLICT - на сервере чужая учетная запись: записи не загружаются и не публикуются до решения пользователя
-enum class Status(val label: String) { OFFLINE("нет соединения"), CONNECTING("подключение"), ONLINE("в сети"), CONFLICT("синхронизация остановлена") }
+enum class Status(@StringRes val label: Int) {
+    OFFLINE(R.string.status_offline),
+    CONNECTING(R.string.status_connecting),
+    ONLINE(R.string.status_online),
+    CONFLICT(R.string.status_conflict),
+}
 
 sealed interface Screen {
     data object Login : Screen

@@ -26,12 +26,12 @@ object Biometric {
     // BIOMETRIC_STRONG и setUserAuthenticationParameters есть с Android 11
     val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
-    class Invalidated : Exception("отпечатки на устройстве изменились, быструю разблокировку нужно включить заново")
+    class Invalidated : Exception()
 
     fun encrypt(activity: Activity, secret: ByteArray, onDone: (ByteArray) -> Unit, onError: (String) -> Unit) {
         val cipher = Cipher.getInstance(Store.TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, createKey())
-        prompt(activity, cipher, "Включить разблокировку отпечатком", { c -> onDone(c.iv + c.doFinal(secret)) }, onError)
+        prompt(activity, cipher, activity.getString(R.string.biometric_enable), { c -> onDone(c.iv + c.doFinal(secret)) }, onError)
     }
 
     fun decrypt(activity: Activity, encrypted: ByteArray, onDone: (ByteArray) -> Unit, onError: (String) -> Unit) {
@@ -41,7 +41,7 @@ object Biometric {
         } catch (e: KeyPermanentlyInvalidatedException) {
             throw Invalidated()
         }
-        prompt(activity, cipher, "Разблокировать InkVault", { c -> onDone(c.doFinal(encrypted, Store.IV_LEN, encrypted.size - Store.IV_LEN)) }, onError)
+        prompt(activity, cipher, activity.getString(R.string.biometric_unlock_title), { c -> onDone(c.doFinal(encrypted, Store.IV_LEN, encrypted.size - Store.IV_LEN)) }, onError)
     }
 
     private fun prompt(activity: Activity, cipher: Cipher, title: String, onDone: (Cipher) -> Unit, onError: (String) -> Unit) {
@@ -49,11 +49,12 @@ object Biometric {
         val prompt = BiometricPrompt.Builder(activity)
             .setTitle(title)
             .setAllowedAuthenticators(BIOMETRIC_STRONG)
-            .setNegativeButton("Мастер-пароль", executor) { _, _ -> onError("разблокировка отпечатком отменена") }
+            .setNegativeButton(activity.getString(R.string.master_password), executor) { _, _ -> onError(activity.getString(R.string.biometric_canceled)) }
             .build()
         prompt.authenticate(BiometricPrompt.CryptoObject(cipher), CancellationSignal(), executor, object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                runCatching { onDone(result.cryptoObject?.cipher ?: error("нет ключа после проверки отпечатка")) }.onFailure { onError(it.message ?: "ошибка ключа") }
+                runCatching { onDone(result.cryptoObject?.cipher ?: error(activity.getString(R.string.biometric_no_key))) }
+                    .onFailure { onError(it.message ?: activity.getString(R.string.biometric_key_error)) }
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {

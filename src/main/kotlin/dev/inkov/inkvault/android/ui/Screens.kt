@@ -13,31 +13,41 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -75,8 +85,15 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.LinkAnnotation
@@ -84,6 +101,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
@@ -93,10 +111,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.inkov.inkvault.android.Biometric
+import dev.inkov.inkvault.android.BuildConfig
 import dev.inkov.inkvault.android.FAVORITE
 import dev.inkov.inkvault.android.Item
 import dev.inkov.inkvault.android.PASSWORD_MODE
 import dev.inkov.inkvault.android.PIN_TOTP
+import dev.inkov.inkvault.android.R
 import dev.inkov.inkvault.android.Screen
 import dev.inkov.inkvault.android.Settings
 import dev.inkov.inkvault.android.Status
@@ -171,7 +191,9 @@ private fun Field(
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
-        label = { Text(label) },
+        // без переноса: с несколькими иконками справа метка иначе занимает две строки,
+        // лишнее обрезается у иконок так же, как введенный текст
+        label = { Text(label, maxLines = 1, softWrap = false) },
         supportingText = hint?.let { { Text(it) } },
         trailingIcon = actions?.let { content -> { Row { content() } } },
         isError = error,
@@ -182,10 +204,10 @@ private fun Field(
     )
 }
 
-// Кнопка-значок внутри поля. Подпись по долгому нажатию: значок без текста должен оставаться понятным
+// Подпись по долгому нажатию: значок без текста должен оставаться понятным
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FieldAction(icon: ImageVector, description: String, tag: String, onClick: () -> Unit) {
+private fun IconAction(icon: ImageVector, description: String, tag: String, onClick: () -> Unit) {
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
         tooltip = { PlainTooltip { Text(description) } },
@@ -195,10 +217,27 @@ private fun FieldAction(icon: ImageVector, description: String, tag: String, onC
     }
 }
 
+// Нажатие на всю строку, а не только на квадрат: больше область касания, TalkBack читает строку целиком
+@Composable
+private fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, label: String, tag: String? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(checked, role = Role.Checkbox, onValueChange = onChange)
+            .then(if (tag != null) Modifier.tag(tag) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Checkbox(checked, onCheckedChange = null)
+        Text(label)
+    }
+}
+
 @Composable
 private fun Form(content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         content()
@@ -217,41 +256,34 @@ private fun LoginScreen(controller: VaultController) {
     var insecure by remember { mutableStateOf(saved?.insecure ?: false) }
     val noVault = controller.noVault
     var confirmOrphans by remember { mutableStateOf(false) }
+    val resources = LocalResources.current
     Form {
         Text("InkVault", style = MaterialTheme.typography.headlineMedium)
-        Field(jid, { jid = it.trim() }, "JID", "jid", hint = "имя@сервер")
-        Field(xmppPassword, { xmppPassword = it }, "Пароль XMPP", "xmpp-password", secret = true)
-        Field(master, { master = it }, "Мастер-пароль", "master-password", secret = true)
-        Field(host, { host = it.trim() }, "Адрес сервера", "host", hint = "Пусто - по SRV-записям домена")
-        Field(port, { port = it.filter(Char::isDigit) }, "Порт", "port")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(insecure, { insecure = it }, Modifier.tag("insecure"))
-            Text("Без TLS (только тестовый сервер)")
-        }
+        Field(jid, { jid = it.trim() }, "JID", "jid", hint = stringResource(R.string.login_jid_hint))
+        Field(xmppPassword, { xmppPassword = it }, stringResource(R.string.login_xmpp_password), "xmpp-password", secret = true)
+        Field(master, { master = it }, stringResource(R.string.master_password), "master-password", secret = true)
+        Field(host, { host = it.trim() }, stringResource(R.string.login_host), "host", hint = stringResource(R.string.login_host_hint))
+        Field(port, { port = it.filter(Char::isDigit) }, stringResource(R.string.login_port), "port")
+        CheckRow(insecure, { insecure = it }, stringResource(R.string.login_insecure), "insecure")
         val settings = Settings(jid, host, port.toIntOrNull() ?: 5222, insecure)
         Button({ controller.login(settings, xmppPassword, master, create = false) }, Modifier.fillMaxWidth().tag("open"), enabled = !controller.busy) {
-            Text("Открыть хранилище")
+            Text(stringResource(R.string.login_open))
         }
         if (controller.busy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
         controller.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.tag("error")) }
         if (noVault != null) {
-            if (!noVault) Text("Создать новое хранилище? Мастер-пароль восстановить будет нельзя, повторите его.")
-            Field(repeat, { repeat = it }, "Мастер-пароль еще раз", "repeat-password", secret = true)
+            if (!noVault) Text(stringResource(R.string.login_create_prompt))
+            Field(repeat, { repeat = it }, stringResource(R.string.login_repeat), "repeat-password", secret = true)
             // записи без учетной записи: прежнее хранилище может восстановить устройство с кэшем, создание поверх - только явно
-            if (noVault) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(confirmOrphans, { confirmOrphans = it }, Modifier.tag("confirm-orphans"))
-                    Text("Все равно создать новое хранилище. Записи на сервере будут удалены")
-                }
-            }
+            if (noVault) CheckRow(confirmOrphans, { confirmOrphans = it }, stringResource(R.string.login_confirm_orphans), "confirm-orphans")
             Button(
                 {
                     if (repeat == master) controller.login(settings, xmppPassword, master, create = true, replaceOrphans = confirmOrphans)
-                    else controller.error = "мастер-пароли не совпадают"
+                    else controller.error = resources.getString(R.string.login_master_mismatch)
                 },
                 Modifier.fillMaxWidth().tag("create"),
                 enabled = !controller.busy && (!noVault || confirmOrphans),
-            ) { Text("Создать хранилище") }
+            ) { Text(stringResource(R.string.login_create)) }
         }
     }
 }
@@ -262,14 +294,14 @@ private fun UnlockScreen(controller: VaultController, activity: Activity) {
     Form {
         Text("InkVault", style = MaterialTheme.typography.headlineMedium)
         Text(controller.settings?.jid.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Field(master, { master = it }, "Мастер-пароль", "master-password", secret = true)
-        Button({ controller.unlock(master).also { master = "" } }, Modifier.fillMaxWidth().tag("unlock"), enabled = !controller.busy) { Text("Разблокировать") }
+        Field(master, { master = it }, stringResource(R.string.master_password), "master-password", secret = true)
+        Button({ controller.unlock(master).also { master = "" } }, Modifier.fillMaxWidth().tag("unlock"), enabled = !controller.busy) { Text(stringResource(R.string.unlock)) }
         if (controller.biometricEnabled) {
-            OutlinedButton({ controller.unlockWithBiometrics(activity) }, Modifier.fillMaxWidth().tag("unlock-biometric")) { Text("Разблокировать отпечатком") }
+            OutlinedButton({ controller.unlockWithBiometrics(activity) }, Modifier.fillMaxWidth().tag("unlock-biometric")) { Text(stringResource(R.string.unlock_biometric)) }
         }
         if (controller.busy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
         controller.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.tag("error")) }
-        TextButton({ controller.forget() }, Modifier.tag("forget")) { Text("Выйти с этого устройства") }
+        TextButton({ controller.forget() }, Modifier.tag("forget")) { Text(stringResource(R.string.forget)) }
     }
 }
 
@@ -297,6 +329,7 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
     var conflictHidden by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val resources = LocalResources.current
     // отсчет до повторного подключения обновляется раз в секунду, пока повтор не наступил
     LaunchedEffect(controller.retryAt) {
         now = System.currentTimeMillis()
@@ -347,14 +380,13 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
                                 // now - только повод перерисовать раз в секунду: в первом кадре после новой попытки
                                 // он еще старый, поэтому время берется текущее
                                 val seconds = (controller.retryAt - maxOf(now, System.currentTimeMillis()) + 999) / 1000
-                                // неразрывные пробелы: при переносе "через 9 с" остается одной строкой
-                                if (seconds > 0) append(", повтор через\u00A0$seconds\u00A0с")
+                                if (seconds > 0) append(stringResource(R.string.status_retry, seconds))
                             } else {
-                                append(controller.status.label)
+                                append(stringResource(controller.status.label))
                             }
                             if (controller.pending > 0) {
                                 append(", ")
-                                withStyle(SpanStyle(color = pendingColor)) { append("не отправлено: ${controller.pending}") }
+                                withStyle(SpanStyle(color = pendingColor)) { append(stringResource(R.string.status_pending, controller.pending)) }
                             }
                         }
                         Text(
@@ -368,12 +400,30 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
                     }
                 },
                 actions = {
-                    TextButton({ generator = true }, Modifier.tag("generator")) { Text("Генератор") }
-                    TextButton({ menu = true }, Modifier.tag("menu")) { Text("Еще") }
+                    IconAction(AppIcons.Key, stringResource(R.string.generator), "generator") { generator = true }
+                    Box {
+                        IconAction(AppIcons.MoreVert, stringResource(R.string.more), "menu") { menu = true }
+                        DropdownMenu(menu, { menu = false }) {
+                            if (Biometric.supported) {
+                                if (controller.biometricEnabled) {
+                                    DropdownMenuItem({ Text(stringResource(R.string.biometric_disable)) }, { menu = false; controller.disableBiometrics() }, Modifier.tag("biometric-off"))
+                                } else {
+                                    DropdownMenuItem({ Text(stringResource(R.string.biometric_enable)) }, { menu = false; controller.enableBiometrics(activity) }, Modifier.tag("biometric-on"))
+                                }
+                            }
+                            DropdownMenuItem({ Text(stringResource(R.string.backup)) }, { menu = false; backup = true }, Modifier.tag("backup"))
+                            DropdownMenuItem({ Text(stringResource(R.string.change_password)) }, { menu = false; changePassword = true }, Modifier.tag("change-password"))
+                            DropdownMenuItem({ Text(stringResource(R.string.item_limit)) }, { menu = false; limit = true }, Modifier.tag("limit"))
+                            DropdownMenuItem({ Text(stringResource(R.string.about)) }, { menu = false; about = true }, Modifier.tag("about"))
+                            DropdownMenuItem({ Text(stringResource(R.string.lock)) }, { menu = false; controller.lock() }, Modifier.tag("lock"))
+                            HorizontalDivider()
+                            DropdownMenuItem({ Text(stringResource(R.string.delete_vault), color = MaterialTheme.colorScheme.error) }, { menu = false; deleteVault = true }, Modifier.tag("delete-vault"))
+                        }
+                    }
                 },
             )
         },
-        floatingActionButton = { FloatingActionButton({ editing = NEW }, Modifier.tag("new")) { Text("+", style = MaterialTheme.typography.headlineSmall) } },
+        floatingActionButton = { FloatingActionButton({ editing = NEW }, Modifier.tag("new")) { Icon(AppIcons.Add, stringResource(R.string.add_item)) } },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             if (controller.status == Status.CONFLICT && !conflictHidden) {
@@ -383,83 +433,101 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
                     shape = MaterialTheme.shapes.medium,
                 ) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("На сервере другая учетная запись хранилища", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Text(stringResource(R.string.conflict_title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
                         Text(
-                            "Мастер-пароль этого устройства ее не открывает. Синхронизация остановлена, записи на этом устройстве доступны и сохраняются.",
+                            stringResource(R.string.conflict_text),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
-                        TextButton({ conflictHidden = true }, Modifier.tag("conflict-keep")) { Text("Работать на этом устройстве") }
+                        TextButton({ conflictHidden = true }, Modifier.tag("conflict-keep")) { Text(stringResource(R.string.conflict_keep)) }
                         TextButton(
-                            {
-                                confirm = "Учетная запись этого устройства будет закрыта, дальше нужен мастер-пароль учетной записи с сервера. " +
-                                    "Записи этого устройства, которых нет на сервере, станут недоступны, разблокировка отпечатком выключится." to { controller.switchToServerAccount() }
-                            },
+                            { confirm = resources.getString(R.string.conflict_server_confirm) to { controller.switchToServerAccount() } },
                             Modifier.tag("conflict-server"),
-                        ) { Text("Войти в учетную запись с сервера") }
+                        ) { Text(stringResource(R.string.conflict_server)) }
                         TextButton(
-                            {
-                                confirm = "Учетная запись на сервере будет заменена учетной записью этого устройства, записи на сервере удалены, а записи этого устройства опубликованы заново. " +
-                                    "Устройства с учетной записью с сервера потеряют доступ к ее записям, если у них нет своей копии." to { controller.replaceServerAccount() }
-                            },
+                            { confirm = resources.getString(R.string.conflict_replace_confirm) to { controller.replaceServerAccount() } },
                             Modifier.tag("conflict-replace"),
-                        ) { Text("Заменить учетную запись на сервере", color = MaterialTheme.colorScheme.error) }
+                        ) { Text(stringResource(R.string.conflict_replace), color = MaterialTheme.colorScheme.error) }
                     }
                 }
             }
-            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 12.dp).tag("search"), placeholder = { Text("Поиск") }, singleLine = true)
+            val focusManager = LocalFocusManager.current
+            OutlinedTextField(
+                query,
+                { query = it },
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp).tag("search"),
+                placeholder = { Text(stringResource(R.string.search)) },
+                leadingIcon = { Icon(AppIcons.Search, null) },
+                trailingIcon = if (query.isEmpty()) null else { { IconAction(AppIcons.Close, stringResource(R.string.search_clear), "search-clear") { query = "" } } },
+                singleLine = true,
+                shape = CircleShape,
+                // список фильтруется при вводе, кнопка поиска на клавиатуре только скрывает ее
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+            )
+            val chips = listOf(stringResource(R.string.filter_all) to Filter.All, stringResource(R.string.filter_favorites) to Filter.Favorites) +
+                tags.map { it.substringAfterLast('/') to Filter.Tag(it) } + listOf(stringResource(R.string.filter_trash) to Filter.Trash)
             LazyRow(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val chips = listOf("Все" to Filter.All, "Избранное" to Filter.Favorites) + tags.map { it.substringAfterLast('/') to Filter.Tag(it) } + listOf("Корзина" to Filter.Trash)
-                items(chips) { (label, f) -> FilterChip(filter == f, { filter = f }, { Text(label) }, Modifier.tag("filter-$label")) }
+                items(chips) { (label, f) ->
+                    // метка для тестов не зависит от языка интерфейса
+                    val key = when (f) {
+                        Filter.All -> "all"
+                        Filter.Favorites -> "favorites"
+                        Filter.Trash -> "trash"
+                        is Filter.Tag -> f.tag
+                    }
+                    FilterChip(filter == f, { filter = f }, { Text(label) }, Modifier.tag("filter-$key"))
+                }
             }
-            LazyColumn(Modifier.fillMaxSize().tag("items")) {
+            val untitled = stringResource(R.string.untitled)
+            val unsent = stringResource(R.string.item_unsent)
+            // отступ снизу под FAB: иначе он закрывает последнюю запись
+            LazyColumn(Modifier.fillMaxSize().tag("items"), contentPadding = PaddingValues(bottom = 88.dp)) {
                 val trash = controller.items.count { it.deleted }
                 if (filter == Filter.Trash && trash > 0) item {
                     OutlinedButton(
-                        { confirm = "Записи в корзине ($trash) будут удалены навсегда на всех устройствах. Восстановить их будет нельзя." to { controller.purgeTrash() } },
+                        { confirm = resources.getString(R.string.purge_trash_confirm, trash) to { controller.purgeTrash() } },
                         Modifier.padding(horizontal = 16.dp, vertical = 8.dp).tag("purge-trash"),
-                    ) { Text("Очистить корзину", color = MaterialTheme.colorScheme.error) }
+                    ) { Text(stringResource(R.string.purge_trash), color = MaterialTheme.colorScheme.error) }
                 }
                 items(visible, key = { it.id }) { item ->
-                    Column(Modifier.fillMaxWidth().clickable { editing = item.id }.padding(horizontal = 16.dp, vertical = 10.dp).tag("item")) {
-                        val pendingColor = MaterialTheme.colorScheme.tertiary
-                        Text(buildAnnotatedString {
-                            append((if (item.favorite) "★ " else "") + item.field("name").ifEmpty { "(без названия)" })
-                            if (item.pending) withStyle(SpanStyle(color = pendingColor)) { append(" ●") }
-                        })
-                        Text(listOf(item.field("username"), item.field("url")).filter { it.isNotEmpty() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    HorizontalDivider()
+                    val details = listOf(item.field("username"), item.field("url")).filter { it.isNotEmpty() }.joinToString(" · ")
+                    ListItem(
+                        headlineContent = { Text(item.field("name").ifEmpty { untitled }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        modifier = Modifier.clickable { editing = item.id }.tag("item"),
+                        supportingContent = if (details.isEmpty()) null else { { Text(details, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
+                        leadingContent = { Monogram(item.field("name")) },
+                        trailingContent = if (!item.favorite && !item.pending) null else { {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (item.pending) {
+                                    Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.tertiary, CircleShape).semantics { contentDescription = unsent })
+                                }
+                                if (item.favorite) Icon(AppIcons.Star, stringResource(R.string.favorite), tint = MaterialTheme.colorScheme.primary)
+                            }
+                        } },
+                    )
                 }
-                if (visible.isEmpty()) item { Text(if (filter == Filter.Trash) "Корзина пуста" else "Записей нет", Modifier.padding(16.dp)) }
+                if (visible.isEmpty()) item {
+                    val (title, hint) = when {
+                        query.isNotBlank() -> R.string.empty_not_found to R.string.empty_not_found_hint
+                        filter == Filter.Trash -> R.string.empty_trash to null
+                        filter == Filter.All -> R.string.empty_items to R.string.empty_items_hint
+                        else -> R.string.empty_items to null
+                    }
+                    Column(
+                        Modifier.fillParentMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+                        hint?.let { Text(stringResource(it), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
+                    }
+                }
             }
         }
     }
 
     if (generator) GeneratorDialog(onUse = null) { generator = false }
-    if (menu) {
-        AlertDialog(
-            onDismissRequest = { menu = false },
-            confirmButton = { TextButton({ menu = false }) { Text("Закрыть") } },
-            text = {
-                Column {
-                    if (Biometric.supported) {
-                        if (controller.biometricEnabled) {
-                            TextButton({ menu = false; controller.disableBiometrics() }, Modifier.tag("biometric-off")) { Text("Выключить разблокировку отпечатком") }
-                        } else {
-                            TextButton({ menu = false; controller.enableBiometrics(activity) }, Modifier.tag("biometric-on")) { Text("Включить разблокировку отпечатком") }
-                        }
-                    }
-                    TextButton({ menu = false; backup = true }, Modifier.tag("backup")) { Text("Резервная копия") }
-                    TextButton({ menu = false; changePassword = true }, Modifier.tag("change-password")) { Text("Сменить мастер-пароль") }
-                    TextButton({ menu = false; limit = true }, Modifier.tag("limit")) { Text("Лимит записей") }
-                    TextButton({ menu = false; about = true }, Modifier.tag("about")) { Text("О программе") }
-                    TextButton({ menu = false; controller.lock() }, Modifier.tag("lock")) { Text("Заблокировать") }
-                    TextButton({ menu = false; deleteVault = true }, Modifier.tag("delete-vault")) { Text("Удалить хранилище", color = MaterialTheme.colorScheme.error) }
-                }
-            },
-        )
-    }
     if (backup) BackupDialog(controller) { backup = false }
     if (limit) MaxItemsDialog(controller) { limit = false }
     if (deleteVault) DeleteVaultDialog(controller) { deleteVault = false }
@@ -469,8 +537,23 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
         AlertDialog(
             onDismissRequest = { confirm = null },
             text = { Text(text) },
-            confirmButton = { TextButton({ confirm = null; action() }, Modifier.tag("confirm-ok")) { Text("Продолжить", color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton({ confirm = null }, Modifier.tag("confirm-cancel")) { Text("Отмена") } },
+            confirmButton = { TextButton({ confirm = null; action() }, Modifier.tag("confirm-ok")) { Text(stringResource(R.string.confirm_continue), color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton({ confirm = null }, Modifier.tag("confirm-cancel")) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+}
+
+// Буква названия вместо значка сайта: загрузка значков раскрыла бы адреса записей стороннему серверу
+@Composable
+private fun Monogram(name: String) {
+    Box(
+        Modifier.size(40.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape).clearAndSetSemantics {},
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            name.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "#",
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            style = MaterialTheme.typography.titleMedium,
         )
     }
 }
@@ -489,17 +572,17 @@ private fun AboutDialog(onClose: () -> Unit) {
         title = { Text("InkVault") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Автор: Evgeny Inkov")
-                Text(line("Почта", "me@inkov.dev", "mailto:me@inkov.dev"))
+                Text(stringResource(R.string.about_version, BuildConfig.VERSION_NAME))
+                Text(stringResource(R.string.about_author, "Evgeny Inkov"))
+                Text(line(stringResource(R.string.about_email), "me@inkov.dev", "mailto:me@inkov.dev"))
                 Text(line("XMPP", "tzx1z@inkov.dev", "xmpp:tzx1z@inkov.dev"))
-                Text(line("Сайт", "inkov.dev", "https://inkov.dev"))
+                Text(line(stringResource(R.string.about_site), "inkov.dev", "https://inkov.dev"))
+                Text(line(stringResource(R.string.about_license), "GNU AGPL v3.0", "https://www.gnu.org/licenses/agpl-3.0.html"))
             }
         },
-        confirmButton = { TextButton(onClose, Modifier.tag("about-close")) { Text("Закрыть") } },
+        confirmButton = { TextButton(onClose, Modifier.tag("about-close")) { Text(stringResource(R.string.close)) } },
     )
 }
-
-private const val MAX_ITEMS_HINT = "Не больше pep_max_items на сервере, в Prosody по умолчанию 256"
 
 @Composable
 private fun MaxItemsDialog(controller: VaultController, onClose: () -> Unit) {
@@ -508,11 +591,11 @@ private fun MaxItemsDialog(controller: VaultController, onClose: () -> Unit) {
     val problem = controller.maxItemsProblem(value.toIntOrNull())
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Лимит записей") },
+        title = { Text(stringResource(R.string.item_limit)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Лимит записей узла хранилища на сервере, корзина входит в него. Больше 256 записей сервер примет, если администратор поднял pep_max_items в Prosody. Новое значение применяется сразу и действует на всех устройствах, нужна связь с сервером.", style = MaterialTheme.typography.bodySmall)
-                Field(value, { value = it.filter(Char::isDigit).take(6) }, "Лимит записей", "mi-value", hint = problem ?: MAX_ITEMS_HINT, error = problem != null)
+                Text(stringResource(R.string.limit_text), style = MaterialTheme.typography.bodySmall)
+                Field(value, { value = it.filter(Char::isDigit).take(6) }, stringResource(R.string.item_limit), "mi-value", hint = problem ?: stringResource(R.string.limit_hint), error = problem != null)
             }
         },
         confirmButton = {
@@ -520,9 +603,9 @@ private fun MaxItemsDialog(controller: VaultController, onClose: () -> Unit) {
                 { onClose(); controller.changeMaxItems(value.toInt()) },
                 Modifier.tag("mi-save"),
                 enabled = problem == null && value.toIntOrNull() != current,
-            ) { Text("Сохранить") }
+            ) { Text(stringResource(R.string.save)) }
         },
-        dismissButton = { TextButton(onClose, Modifier.tag("mi-cancel")) { Text("Отмена") } },
+        dismissButton = { TextButton(onClose, Modifier.tag("mi-cancel")) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
@@ -533,19 +616,20 @@ private fun ChangePasswordDialog(controller: VaultController, onClose: () -> Uni
     var repeat by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    val resources = LocalResources.current
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Смена мастер-пароля") },
+        title = { Text(stringResource(R.string.change_password_title)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Записи не перешифровываются. Другие устройства примут новый пароль после подключения к серверу. Файлы экспорта под мастер-паролем по-прежнему открываются старым паролем.",
+                    stringResource(R.string.change_password_text),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Field(current, { current = it }, "Текущий мастер-пароль", "cp-current", secret = true)
-                Field(newPassword, { newPassword = it }, "Новый мастер-пароль", "cp-new", secret = true)
-                Field(repeat, { repeat = it }, "Новый мастер-пароль еще раз", "cp-repeat", secret = true)
+                Field(current, { current = it }, stringResource(R.string.current_master_password), "cp-current", secret = true)
+                Field(newPassword, { newPassword = it }, stringResource(R.string.new_master_password), "cp-new", secret = true)
+                Field(repeat, { repeat = it }, stringResource(R.string.new_master_password_repeat), "cp-repeat", secret = true)
                 if (busy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.tag("cp-error")) }
             }
@@ -555,7 +639,7 @@ private fun ChangePasswordDialog(controller: VaultController, onClose: () -> Uni
                 {
                     error = null
                     if (newPassword != repeat) {
-                        error = "новые пароли не совпадают"
+                        error = resources.getString(R.string.new_passwords_mismatch)
                         return@TextButton
                     }
                     busy = true
@@ -563,9 +647,9 @@ private fun ChangePasswordDialog(controller: VaultController, onClose: () -> Uni
                 },
                 Modifier.tag("cp-save"),
                 enabled = !busy && current.isNotEmpty() && newPassword.isNotEmpty(),
-            ) { Text("Сменить") }
+            ) { Text(stringResource(R.string.change)) }
         },
-        dismissButton = { TextButton(onClose, Modifier.tag("cp-cancel")) { Text("Отмена") } },
+        dismissButton = { TextButton(onClose, Modifier.tag("cp-cancel")) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
@@ -576,16 +660,16 @@ private fun DeleteVaultDialog(controller: VaultController, onClose: () -> Unit) 
     var busy by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Удалить хранилище") },
+        title = { Text(stringResource(R.string.delete_vault)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("С сервера будут удалены все записи, корзина и учетная запись хранилища, с этого устройства - учетная запись, кэш и разблокировка отпечатком. Восстановить их можно только из файла экспорта.")
+                Text(stringResource(R.string.delete_vault_text))
                 Text(
-                    "Устройство, где хранилище уже открыто, при подключении вернет его на сервер. Перед удалением выйдите из хранилища на других устройствах.",
+                    stringResource(R.string.delete_vault_warning),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Field(password, { password = it }, "Мастер-пароль", "dv-password", secret = true)
+                Field(password, { password = it }, stringResource(R.string.master_password), "dv-password", secret = true)
                 if (busy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.tag("dv-error")) }
             }
@@ -599,9 +683,9 @@ private fun DeleteVaultDialog(controller: VaultController, onClose: () -> Unit) 
                 },
                 Modifier.tag("dv-delete"),
                 enabled = !busy && password.isNotEmpty(),
-            ) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+            ) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) }
         },
-        dismissButton = { TextButton(onClose, Modifier.tag("dv-cancel")) { Text("Отмена") } },
+        dismissButton = { TextButton(onClose, Modifier.tag("dv-cancel")) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
@@ -614,10 +698,13 @@ private fun displayName(context: Context, uri: Uri): String =
 @Composable
 private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var master by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var repeat by remember { mutableStateOf("") }
     var show by remember { mutableStateOf(false) }
+    // уведомления приложения закрыты диалогом, поэтому результат копирования показан под полем
+    var copied by remember { mutableStateOf<String?>(null) }
     var importUri by remember { mutableStateOf<Uri?>(null) }
     var importPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -637,14 +724,14 @@ private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Резервная копия") },
-        confirmButton = { TextButton(onClose, Modifier.tag("b-close")) { Text("Закрыть") } },
+        title = { Text(stringResource(R.string.backup)) },
+        confirmButton = { TextButton(onClose, Modifier.tag("b-close")) { Text(stringResource(R.string.close)) } },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Экспорт в файл", style = MaterialTheme.typography.titleSmall)
-                Text("Все записи хранилища, включая корзину и историю паролей, в зашифрованном файле.", style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.export_title), style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.export_text), style = MaterialTheme.typography.bodySmall)
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    listOf(false to "Свой пароль", true to "Мастер-пароль").forEachIndexed { i, (isMaster, label) ->
+                    listOf(false to stringResource(R.string.export_separate), true to stringResource(R.string.master_password)).forEachIndexed { i, (isMaster, label) ->
                         SegmentedButton(
                             selected = master == isMaster,
                             onClick = { master = isMaster; error = null },
@@ -654,25 +741,31 @@ private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
                     }
                 }
                 Text(
-                    if (master) "Защита от потери сервера, но не от потери мастер-пароля"
-                    else "Файл откроется и при потере мастер-пароля, если пароль файла хранится отдельно от него",
+                    stringResource(if (master) R.string.export_master_hint else R.string.export_separate_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Field(password, { password = it }, if (master) "Мастер-пароль" else "Пароль файла", "b-password", secret = !show) {
-                    FieldAction(if (show) AppIcons.VisibilityOff else AppIcons.Visibility, if (show) "Скрыть пароль" else "Показать пароль", "b-show") { show = !show }
+                Field(
+                    password, { password = it; copied = null }, stringResource(if (master) R.string.master_password else R.string.file_password), "b-password",
+                    secret = !show, hint = copied.takeIf { !master },
+                ) {
+                    IconAction(if (show) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (show) R.string.hide_password else R.string.show_password), "b-show") { show = !show }
+                    if (!master) IconAction(AppIcons.Copy, stringResource(R.string.copy_file_password), "b-copy") {
+                        copied = copySecret(context, resources.getString(R.string.clip_file_password), password)
+                    }
                     // без похожих символов и спецсимволов: пароль файла чаще переписывают на бумагу, чем вставляют
-                    if (!master) FieldAction(AppIcons.Generate, "Сгенерировать пароль файла", "b-generate") {
+                    if (!master) IconAction(AppIcons.Generate, stringResource(R.string.generate_file_password), "b-generate") {
                         generatePassword(24u, true, true, true, false, true).also { password = it; repeat = it }
                         show = true
+                        copied = null
                     }
                 }
-                if (!master) Field(repeat, { repeat = it }, "Пароль еще раз", "b-repeat", secret = !show)
+                if (!master) Field(repeat, { repeat = it }, stringResource(R.string.password_repeat), "b-repeat", secret = !show)
                 Button(
                     {
                         error = null
                         if (!master && password != repeat) {
-                            error = "пароли не совпадают"
+                            error = resources.getString(R.string.passwords_mismatch)
                             return@Button
                         }
                         busy = true
@@ -684,15 +777,15 @@ private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
                     },
                     Modifier.tag("b-export"),
                     enabled = !busy && password.isNotEmpty(),
-                ) { Text("Сохранить файл") }
+                ) { Text(stringResource(R.string.save_file)) }
 
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Text("Импорт из файла", style = MaterialTheme.typography.titleSmall)
-                Text("Записи из файла сливаются с хранилищем: более новые правки не затираются, повторный импорт ничего не меняет.", style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.import_title), style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.import_text), style = MaterialTheme.typography.bodySmall)
                 OutlinedButton({ open.launch(arrayOf("application/json", "application/octet-stream", "text/plain")) }, Modifier.fillMaxWidth().tag("b-file")) {
-                    Text(importUri?.let { displayName(context, it) } ?: "Выбрать файл", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(importUri?.let { displayName(context, it) } ?: stringResource(R.string.choose_file), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Field(importPassword, { importPassword = it }, "Пароль файла", "b-import-password", secret = true)
+                Field(importPassword, { importPassword = it }, stringResource(R.string.file_password), "b-import-password", secret = true)
                 Button(
                     {
                         val uri = importUri ?: return@Button
@@ -702,7 +795,7 @@ private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
                     },
                     Modifier.tag("b-import"),
                     enabled = !busy && importUri != null && importPassword.isNotEmpty(),
-                ) { Text("Импортировать") }
+                ) { Text(stringResource(R.string.import_action)) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.tag("b-error")) }
             }
         },
@@ -715,6 +808,7 @@ private const val NEW = "new"
 @Composable
 private fun EditorScreen(controller: VaultController, item: Item?, navigate: (String?) -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val values = remember(item?.id) { mutableStateOf(dev.inkov.inkvault.android.FIELDS.associateWith { item?.field(it).orEmpty() }) }
     var tags by remember(item?.id) { mutableStateOf(item?.userTags?.joinToString(", ").orEmpty()) }
     var favorite by remember(item?.id) { mutableStateOf(item?.favorite ?: false) }
@@ -732,18 +826,33 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
 
     Scaffold(topBar = {
         TopAppBar(
-            title = { Text(if (item == null) "Новая запись" else v["name"].orEmpty().ifEmpty { "(без названия)" } + if (deleted) " (в корзине)" else "") },
-            navigationIcon = { TextButton({ navigate(null) }, Modifier.tag("back")) { Text("Назад") } },
+            title = {
+                val name = v["name"].orEmpty().ifEmpty { stringResource(R.string.untitled) }
+                Text(
+                    when {
+                        item == null -> stringResource(R.string.new_item)
+                        deleted -> stringResource(R.string.in_trash, name)
+                        else -> name
+                    },
+                )
+            },
+            navigationIcon = { IconAction(AppIcons.ArrowBack, stringResource(R.string.back), "back") { navigate(null) } },
         )
     }) { padding ->
-        Column(Modifier.padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Field(v["name"].orEmpty(), { set("name", it) }, "Название", "f-name")
-            Field(v["url"].orEmpty(), { set("url", it) }, "Адрес", "f-url")
-            Field(v["username"].orEmpty(), { set("username", it) }, "Логин", "f-username") {
-                FieldAction(AppIcons.Copy, "Копировать логин", "copy-username") { controller.notice(copySecret(context, "логин", v["username"].orEmpty())) }
+        // padding уже содержит навигационную панель, без consumeWindowInsets imePadding прибавил бы ее второй раз
+        Column(
+            Modifier.padding(padding).consumeWindowInsets(padding).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Field(v["name"].orEmpty(), { set("name", it) }, stringResource(R.string.field_name), "f-name")
+            Field(v["url"].orEmpty(), { set("url", it) }, stringResource(R.string.field_url), "f-url")
+            Field(v["username"].orEmpty(), { set("username", it) }, stringResource(R.string.field_username), "f-username") {
+                IconAction(AppIcons.Copy, stringResource(R.string.copy_username), "copy-username") {
+                    controller.notice(copySecret(context, resources.getString(R.string.clip_username), v["username"].orEmpty()))
+                }
             }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf(false to "Обычный пароль", true to "PIN + код").forEachIndexed { i, (pin, label) ->
+                listOf(false to stringResource(R.string.mode_password), true to stringResource(R.string.mode_pin_totp)).forEachIndexed { i, (pin, label) ->
                     SegmentedButton(
                         selected = pinMode == pin,
                         onClick = { pinMode = pin },
@@ -752,42 +861,45 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
                     ) { Text(label) }
                 }
             }
-            val what = if (pinMode) "PIN" else "пароль"
             Field(
-                v["password"].orEmpty(), { set("password", it) }, if (pinMode) "PIN" else "Пароль", "f-password",
-                secret = !showPassword, hint = if (pinMode) "Можно оставить пустым" else null,
+                v["password"].orEmpty(), { set("password", it) }, if (pinMode) "PIN" else stringResource(R.string.field_password), "f-password",
+                secret = !showPassword, hint = if (pinMode) stringResource(R.string.pin_hint) else null,
             ) {
-                FieldAction(if (showPassword) AppIcons.VisibilityOff else AppIcons.Visibility, if (showPassword) "Скрыть $what" else "Показать $what", "show-password") { showPassword = !showPassword }
-                FieldAction(AppIcons.Copy, "Копировать $what", "copy-password") { controller.notice(copySecret(context, what, v["password"].orEmpty())) }
-                FieldAction(AppIcons.Generate, "Сгенерировать $what", "gen-password") { generator = true }
+                val visibility = when {
+                    pinMode -> if (showPassword) R.string.hide_pin else R.string.show_pin
+                    else -> if (showPassword) R.string.hide_password else R.string.show_password
+                }
+                IconAction(if (showPassword) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(visibility), "show-password") { showPassword = !showPassword }
+                IconAction(AppIcons.Copy, stringResource(if (pinMode) R.string.copy_pin else R.string.copy_password), "copy-password") {
+                    val label = resources.getString(if (pinMode) R.string.clip_pin else R.string.clip_password)
+                    controller.notice(copySecret(context, label, v["password"].orEmpty()))
+                }
+                IconAction(AppIcons.Key, stringResource(if (pinMode) R.string.generate_pin else R.string.generate_password), "gen-password") { generator = true }
             }
             // секрет TOTP нужен только для пароля PIN + код; в обычном режиме сохраненное значение не меняется
             if (pinMode) {
                 Field(
-                    v["totp"].orEmpty(), { set("totp", it) }, "Секрет TOTP", "f-totp",
-                    secret = !showSecret, hint = secretError ?: "base32 или ссылка otpauth://totp/...", error = secretError != null,
+                    v["totp"].orEmpty(), { set("totp", it) }, stringResource(R.string.totp_secret), "f-totp",
+                    secret = !showSecret, hint = secretError ?: stringResource(R.string.totp_hint), error = secretError != null,
                 ) {
-                    FieldAction(if (showSecret) AppIcons.VisibilityOff else AppIcons.Visibility, if (showSecret) "Скрыть секрет" else "Показать секрет", "show-totp") { showSecret = !showSecret }
+                    IconAction(if (showSecret) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (showSecret) R.string.hide_secret else R.string.show_secret), "show-totp") { showSecret = !showSecret }
                 }
                 if (secret.isNotEmpty() && secretError == null) OtpField(controller, v["password"].orEmpty(), secret)
             }
-            Field(v["notes"].orEmpty(), { set("notes", it) }, "Заметка", "f-notes", singleLine = false)
-            Field(tags, { tags = it }, "Теги", "f-tags", hint = "Через запятую, иерархия через /")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(favorite, { favorite = it }, Modifier.tag("f-favorite"))
-                Text("Избранное")
-            }
+            Field(v["notes"].orEmpty(), { set("notes", it) }, stringResource(R.string.field_notes), "f-notes", singleLine = false)
+            Field(tags, { tags = it }, stringResource(R.string.field_tags), "f-tags", hint = stringResource(R.string.tags_hint))
+            CheckRow(favorite, { favorite = it }, stringResource(R.string.favorite), "f-favorite")
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!deleted) {
                     Button({
                         val problem = when {
                             !pinMode -> null
-                            secret.isEmpty() -> "для пароля PIN + код нужен секрет TOTP"
+                            secret.isEmpty() -> resources.getString(R.string.totp_required)
                             else -> secretError
                         }
                         if (problem != null) {
-                            controller.notice("не сохранено: $problem")
+                            controller.notice(R.string.not_saved, problem)
                             return@Button
                         }
                         var fields = if (pinMode) v + ("totp" to secret) else v
@@ -799,20 +911,20 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
                         } else {
                             controller.update(item.id, fields, tagList)
                         }
-                        controller.notice(if (item == null) "запись создана" else "запись сохранена")
-                    }, Modifier.tag("save")) { Text("Сохранить") }
+                        controller.notice(if (item == null) R.string.item_created else R.string.item_saved)
+                    }, Modifier.tag("save")) { Text(stringResource(R.string.save)) }
                 }
-                if (item != null && !deleted) OutlinedButton({ controller.delete(item.id); navigate(null) }, Modifier.tag("delete")) { Text("В корзину") }
-                if (item != null && deleted) Button({ controller.restore(item.id); navigate(null) }, Modifier.tag("restore")) { Text("Восстановить") }
+                if (item != null && !deleted) OutlinedButton({ controller.delete(item.id); navigate(null) }, Modifier.tag("delete")) { Text(stringResource(R.string.move_to_trash)) }
+                if (item != null && deleted) Button({ controller.restore(item.id); navigate(null) }, Modifier.tag("restore")) { Text(stringResource(R.string.restore)) }
             }
             // одно значение может встретиться в истории несколько раз (docs/protocol.md в inkvault-core), повторы скрыты
             val history = item?.history?.distinct()?.filter { it != item.field("password") }.orEmpty()
             if (history.isNotEmpty()) {
-                Text("История паролей (${history.size})", style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.password_history, history.size), style = MaterialTheme.typography.titleSmall)
                 history.forEach { old ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("•".repeat(minOf(old.length, 16)), Modifier.weight(1f))
-                        TextButton({ controller.notice(copySecret(context, "старый пароль", old)) }) { Text("Копировать") }
+                        TextButton({ controller.notice(copySecret(context, resources.getString(R.string.clip_old_password), old)) }) { Text(stringResource(R.string.copy)) }
                     }
                 }
             }
@@ -825,6 +937,7 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
 @Composable
 private fun OtpField(controller: VaultController, pin: String, secret: String) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -838,19 +951,19 @@ private fun OtpField(controller: VaultController, pin: String, secret: String) {
         value = pin + code.code,
         onValueChange = {},
         readOnly = true,
-        label = { Text("Готовый пароль: PIN и код") },
+        label = { Text(stringResource(R.string.otp_label)) },
         leadingIcon = {
             CircularProgressIndicator(progress = { code.remaining.toFloat() / code.period.toFloat() }, Modifier.size(22.dp), strokeWidth = 3.dp)
         },
         trailingIcon = {
             Row {
-                FieldAction(if (shown) AppIcons.VisibilityOff else AppIcons.Visibility, if (shown) "Скрыть готовый пароль" else "Показать готовый пароль", "otp-show") { shown = !shown }
-                FieldAction(AppIcons.Copy, "Копировать готовый пароль", "otp-copy") {
-                    controller.notice(copySecret(context, "пароль", pin + totp(secret, System.currentTimeMillis().toULong()).code))
+                IconAction(if (shown) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (shown) R.string.hide_otp else R.string.show_otp), "otp-show") { shown = !shown }
+                IconAction(AppIcons.Copy, stringResource(R.string.copy_otp), "otp-copy") {
+                    controller.notice(copySecret(context, resources.getString(R.string.clip_password), pin + totp(secret, System.currentTimeMillis().toULong()).code))
                 }
             }
         },
-        supportingText = { Text("обновится через ${code.remaining} с", Modifier.tag("otp-remaining")) },
+        supportingText = { Text(stringResource(R.string.otp_remaining, code.remaining.toInt()), Modifier.tag("otp-remaining")) },
         singleLine = true,
         // моноширинный шрифт только для открытого пароля: скрытые точки выглядят как в остальных полях
         textStyle = if (shown) LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace) else LocalTextStyle.current,
@@ -860,15 +973,16 @@ private fun OtpField(controller: VaultController, pin: String, secret: String) {
 }
 
 private fun strength(bits: Double) = when {
-    bits < 60 -> "слабый"
-    bits < 80 -> "средний"
-    bits < 100 -> "сильный"
-    else -> "очень сильный"
+    bits < 60 -> R.string.strength_weak
+    bits < 80 -> R.string.strength_medium
+    bits < 100 -> R.string.strength_strong
+    else -> R.string.strength_very_strong
 }
 
 @Composable
 private fun GeneratorDialog(onUse: ((String) -> Unit)?, onClose: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var length by remember { mutableStateOf(20f) }
     var lower by remember { mutableStateOf(true) }
     var upper by remember { mutableStateOf(true) }
@@ -884,38 +998,33 @@ private fun GeneratorDialog(onUse: ((String) -> Unit)?, onClose: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Генератор паролей") },
+        title = { Text(stringResource(R.string.generator)) },
         text = {
             Column(Modifier.widthIn(max = 480.dp)) {
                 result.onSuccess { (password, bits) ->
                     Text(password, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.tag("g-value"))
-                    Text("${bits.toInt()} бит, ${strength(bits)}", style = MaterialTheme.typography.bodySmall)
+                    Text(pluralStringResource(R.plurals.generator_entropy, bits.toInt(), bits.toInt(), stringResource(strength(bits))), style = MaterialTheme.typography.bodySmall)
                 }.onFailure { Text(it.message.orEmpty(), color = MaterialTheme.colorScheme.error) }
-                Text("Длина: ${length.toInt()}")
+                Text(stringResource(R.string.generator_length, length.toInt()))
                 Slider(length, { length = it }, valueRange = 8f..64f, modifier = Modifier.tag("g-length"))
                 listOf(
-                    Triple("строчные a-z", lower) { b: Boolean -> lower = b },
-                    Triple("заглавные A-Z", upper) { b: Boolean -> upper = b },
-                    Triple("цифры 0-9", digits) { b: Boolean -> digits = b },
-                    Triple("символы !#$%", symbols) { b: Boolean -> symbols = b },
-                    Triple("без похожих: I l 1 O 0 o |", ambiguous) { b: Boolean -> ambiguous = b },
-                ).forEach { (label, checked, change) ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked, change)
-                        Text(label)
-                    }
-                }
+                    Triple(stringResource(R.string.generator_lower), lower) { b: Boolean -> lower = b },
+                    Triple(stringResource(R.string.generator_upper), upper) { b: Boolean -> upper = b },
+                    Triple(stringResource(R.string.generator_digits), digits) { b: Boolean -> digits = b },
+                    Triple(stringResource(R.string.generator_symbols), symbols) { b: Boolean -> symbols = b },
+                    Triple(stringResource(R.string.generator_ambiguous), ambiguous) { b: Boolean -> ambiguous = b },
+                ).forEach { (label, checked, change) -> CheckRow(checked, change, label) }
                 Row {
-                    TextButton({ counter++ }) { Text("Еще") }
-                    TextButton({ result.onSuccess { context.let { c -> copySecret(c, "пароль", it.first) } } }) { Text("Копировать") }
+                    TextButton({ counter++ }) { Text(stringResource(R.string.generator_again)) }
+                    TextButton({ result.onSuccess { copySecret(context, resources.getString(R.string.clip_password), it.first) } }) { Text(stringResource(R.string.copy)) }
                 }
             }
         },
         confirmButton = {
             if (onUse != null) {
-                TextButton({ result.onSuccess { onUse(it.first) }; onClose() }, Modifier.tag("g-use")) { Text("Вставить в запись") }
+                TextButton({ result.onSuccess { onUse(it.first) }; onClose() }, Modifier.tag("g-use")) { Text(stringResource(R.string.generator_use)) }
             }
         },
-        dismissButton = { TextButton(onClose) { Text("Закрыть") } },
+        dismissButton = { TextButton(onClose) { Text(stringResource(R.string.close)) } },
     )
 }

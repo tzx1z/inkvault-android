@@ -30,7 +30,7 @@ data class Settings(val jid: String, val host: String, val port: Int, val insecu
  * ключом из vault key. Пароль XMPP шифруется ключом Keystore: в Smack нет токенов FAST, а
  * переподключаться после обрыва нужно без участия пользователя.
  */
-class Store(context: Context) {
+class Store(private val context: Context) {
     private val dir = context.filesDir
     private val accountFile = File(dir, "account.json")
     private val settingsFile = File(dir, "settings.json")
@@ -105,7 +105,7 @@ class Store(context: Context) {
     private fun writeAtomic(file: File, data: ByteArray) {
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeBytes(data)
-        if (!tmp.renameTo(file)) error("не удалось сохранить ${file.name}")
+        if (!tmp.renameTo(file)) error(context.getString(R.string.store_write_failed, file.name))
     }
 
     private fun xmppKey(): SecretKey {

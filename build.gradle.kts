@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application") version "9.2.1"
     // версия совпадает с Kotlin, встроенным в AGP 9.2.1
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.10"
 }
+
+// ключ подписи release хранится вне репозитория; без signing.properties release-APK собирается неподписанным
+val signing = rootProject.file("signing.properties").takeIf { it.exists() }?.let { file ->
+    Properties().apply { file.inputStream().use { load(it) } }
+}
+
+fun signingProperty(name: String): String =
+    signing?.getProperty(name)?.takeIf { it.isNotBlank() } ?: error("signing.properties: не задан $name")
 
 android {
     namespace = "dev.inkov.inkvault.android"
@@ -20,8 +30,41 @@ android {
         }
     }
 
+    signingConfigs {
+        if (signing != null) {
+            create("release") {
+                storeFile = file(signingProperty("keystore"))
+                storePassword = signingProperty("keystore.password")
+                keyAlias = signingProperty("keystore.alias")
+                // в PKCS12 пароль ключа совпадает с паролем хранилища
+                keyPassword = signingProperty("keystore.password")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    // блок зависимостей шифруется ключом Google Play и нужен только ему, APK распространяется через GitLab
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
+    androidResources {
+        // язык интерфейса - системный; locales_config нужен для выбора языка приложения в настройках Android 13+
+        generateLocaleConfig = true
+        // переводы библиотек на другие языки не попадают в APK: интерфейс целиком на одном языке
+        localeFilters += setOf("en", "ru")
+    }
+
     buildFeatures {
         compose = true
+        // версия в диалоге "О программе"
+        buildConfig = true
     }
 
     compileOptions {

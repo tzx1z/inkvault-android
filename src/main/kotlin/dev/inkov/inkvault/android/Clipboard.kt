@@ -24,5 +24,5 @@ fun copySecret(context: Context, label: String, value: String): String {
     clipboard.setPrimaryClip(clip)
     clearTask?.let(handler::removeCallbacks)
     clearTask = Runnable { if (Build.VERSION.SDK_INT >= 28) clipboard.clearPrimaryClip() }.also { handler.postDelayed(it, CLEAR_MS) }
-    return "скопировано, буфер очистится через ${CLEAR_MS / 1000} с"
+    return context.getString(R.string.copied, CLEAR_MS / 1000)
 }

@@ -5,7 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,33 +49,35 @@ import uniffi.inkvault_uniffi.defaultMaxItems
 import uniffi.inkvault_uniffi.generateNodeId
 
 private const val RETRY_MS = 10_000L
+// блокировка после 15 минут без действий пользователя, время в фоне тоже считается
+private const val AUTO_LOCK_MS = 15 * 60_000L
 // без этого лимита выбранный по ошибке большой файл занял бы память приложения; 5000 записей - около 7 МБ
 private const val IMPORT_MAX_BYTES = 64 * 1024 * 1024
 
 /** orphans - в узле хранилища есть записи без учетной записи: создание требует подтверждения. */
-class NoVaultException(val orphans: Boolean) : Exception(
-    if (orphans) "На сервере есть записи хранилища, но нет учетной записи. Войдите с устройства, где хранилище уже открыто, оно восстановит учетную запись."
-    else "на сервере нет хранилища для этой учетной записи",
-)
+class NoVaultException(val orphans: Boolean, message: String) : Exception(message)
 
 // при полной загрузке узла предупреждения о каждой записи сводятся в одно уведомление
-private val WARNING_SUMMARY = mapOf<String, (Int) -> String>(
-    "missing_on_server" to { "на сервер возвращено записей: $it" },
-    "unreadable" to { "записей с сервера не удалось прочитать: $it" },
+private val WARNING_SUMMARY = mapOf(
+    "missing_on_server" to R.string.warning_missing_on_server,
+    "unreadable" to R.string.warning_unreadable,
 )
 
 /** Подключение не удалось: в message короткая причина для экрана, исходное исключение - в cause. */
 class ConnectionFailed(message: String, cause: Throwable) : Exception(message, cause)
 
 // Тексты исключений Smack длинные и на английском: на экран идет причина, подробности - в журнал
-private fun describe(e: Throwable): String = when {
+private fun describe(context: Context, e: Throwable): String = when {
     // Error из библиотеки - не сетевая причина: на экран идут класс и место ошибки, без adb их больше не узнать
-    e is Error -> "внутренняя ошибка: $e " + e.stackTrace.take(3).joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
-    e is SASLErrorException -> "неверный JID или пароль XMPP"
-    e is UnknownHostException -> "адрес сервера не найден"
-    e is SmackException.EndpointConnectionException && e.connectionExceptions.isEmpty() -> "адрес сервера не найден"
-    generateSequence<Throwable>(e) { it.cause }.any { it is SSLException } -> "не удалось установить защищенное соединение"
-    else -> "сервер недоступен"
+    e is Error -> context.getString(
+        R.string.error_internal,
+        "$e " + e.stackTrace.take(3).joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" },
+    )
+    e is SASLErrorException -> context.getString(R.string.error_auth)
+    e is UnknownHostException -> context.getString(R.string.error_host_not_found)
+    e is SmackException.EndpointConnectionException && e.connectionExceptions.isEmpty() -> context.getString(R.string.error_host_not_found)
+    generateSequence<Throwable>(e) { it.cause }.any { it is SSLException } -> context.getString(R.string.error_tls)
+    else -> context.getString(R.string.error_unreachable)
 }
 
 // MiniDNS не проходит CNAME в цели SRV и возвращает пустой список. Smack делает из него точку подключения
@@ -142,6 +146,9 @@ class VaultController(private val context: Context) {
     // уведомление об ошибке подключения - только при первой ошибке серии или смене причины
     private var shownProblem: String? = null
     private val retry = Runnable { if (!locked) worker.execute { connectInBackground() } }
+    // elapsedRealtime, а не uptime: время сна устройства тоже считается
+    private var lastActivity = 0L
+    private val autoLock = Runnable { checkAutoLock() }
     // учетная запись с сервера при конфликте: на нее можно перейти по решению пользователя
     @Volatile private var foreignAccount: String? = null
     // состояние конфликта для рабочего потока: уведомление - только при входе в конфликт
@@ -165,6 +172,10 @@ class VaultController(private val context: Context) {
         notices.add(text)
         main.postDelayed({ notices.remove(text) }, 3000)
     }
+
+    fun notice(@StringRes id: Int, vararg args: Any) = notice(str(id, *args))
+
+    private fun str(@StringRes id: Int, vararg args: Any): String = context.getString(id, *args)
 
     private fun ui(action: () -> Unit) = main.post(action)
 
@@ -199,7 +210,7 @@ class VaultController(private val context: Context) {
             if (!create || (orphans && !replaceOrphans)) {
                 connection.disconnect()
                 ui { noVault = orphans }
-                throw NoVaultException(orphans)
+                throw NoVaultException(orphans, str(if (orphans) R.string.no_vault_orphans else R.string.no_vault))
             }
             VaultAccount.create(masterPassword, now()).also {
                 // записи прежней учетной записи новой не открыть, они только мешали бы при каждой загрузке узла
@@ -215,7 +226,7 @@ class VaultController(private val context: Context) {
     }
 
     fun unlock(masterPassword: String) = background {
-        val saved = store.account() ?: error("на устройстве нет учетной записи")
+        val saved = store.account() ?: error(str(R.string.no_local_account))
         val local = runCatching { VaultAccount.unlock(saved, masterPassword) }
         local.getOrNull()?.let {
             open(it)
@@ -261,20 +272,20 @@ class VaultController(private val context: Context) {
         } catch (e: Biometric.Invalidated) {
             store.clearDevice()
             biometricEnabled = false
-            error = e.message
+            error = str(R.string.biometric_invalidated)
         }
     }
 
     fun enableBiometrics(activity: Activity) {
         val current = account ?: return
         worker.execute {
-            val enrollment = runCatching { current.enrollDevice() }.getOrElse { notice(it.message ?: "ошибка"); return@execute }
+            val enrollment = runCatching { current.enrollDevice() }.getOrElse { notice(it.message ?: str(R.string.error)); return@execute }
             ui {
                 Biometric.encrypt(activity, enrollment.secret, { encrypted ->
                     enrollment.secret.fill(0)
                     store.saveDevice(encrypted, enrollment.blob)
                     biometricEnabled = true
-                    notice("разблокировка отпечатком включена")
+                    notice(R.string.biometric_enabled)
                 }, { notice(it) })
             }
         }
@@ -282,9 +293,9 @@ class VaultController(private val context: Context) {
 
     /** Почему лимит записей не подходит, null - подходит. */
     fun maxItemsProblem(value: Int?): String? = when {
-        value == null || value !in MAX_ITEMS_RANGE -> "лимит записей - число от ${MAX_ITEMS_RANGE.first} до ${MAX_ITEMS_RANGE.last}"
+        value == null || value !in MAX_ITEMS_RANGE -> str(R.string.limit_range, MAX_ITEMS_RANGE.first, MAX_ITEMS_RANGE.last)
         // при уменьшении max_items Prosody удаляет из узла самые старые записи
-        value < items.size -> "в хранилище записей: ${items.size}, при меньшем лимите сервер удалил бы часть из них"
+        value < items.size -> str(R.string.limit_too_small, items.size)
         else -> null
     }
 
@@ -293,18 +304,33 @@ class VaultController(private val context: Context) {
         val e = engine ?: return@execute
         runCatching {
             maxItemsProblem(value)?.let { error(it) }
-            if (!online) error("нет соединения с сервером")
+            if (!online) error(str(R.string.not_connected))
             apply(e.setMaxItems(value.toUInt()))
         }.onFailure { notice(it.message ?: it.javaClass.simpleName) }
         // отказ сервера приходит предупреждением движка, лимит при этом остается прежним
-        if (e.maxItems() == value.toUInt()) notice("лимит записей: $value")
+        if (e.maxItems() == value.toUInt()) notice(R.string.limit_changed, value)
         refresh()
     }
 
     fun disableBiometrics() {
         store.clearDevice()
         biometricEnabled = false
-        notice("разблокировка отпечатком выключена")
+        notice(R.string.biometric_disabled)
+    }
+
+    fun userActive() {
+        lastActivity = SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * Отложенная проверка переносится на остаток срока, а не на каждое касание. Handler не идет во время
+     * сна устройства, поэтому проверка вызывается и при возврате в приложение.
+     */
+    fun checkAutoLock() {
+        main.removeCallbacks(autoLock)
+        if (locked) return
+        val left = lastActivity + AUTO_LOCK_MS - SystemClock.elapsedRealtime()
+        if (left > 0) main.postDelayed(autoLock, left) else lock()
     }
 
     /** Блокировка: соединение закрывается, ключи в ядре освобождаются, кэш остается на устройстве. */
@@ -312,8 +338,11 @@ class VaultController(private val context: Context) {
         locked = true
         online = false
         main.removeCallbacks(retry)
+        main.removeCallbacks(autoLock)
         connectionProblem = null
         retryAt = 0
+        // экран закрывается сразу: рабочий поток может быть занят подключением, а записи не должны быть видны до его освобождения
+        screen = Screen.Unlock
         worker.execute {
             shownProblem = null
             conflict = false
@@ -328,7 +357,6 @@ class VaultController(private val context: Context) {
             ui {
                 items = emptyList()
                 status = Status.OFFLINE
-                screen = Screen.Unlock
             }
         }
     }
@@ -365,7 +393,7 @@ class VaultController(private val context: Context) {
     fun prepareExport(password: String, master: Boolean, onError: (String) -> Unit, onReady: (String) -> Unit) = worker.execute {
         val e = engine ?: return@execute
         runCatching {
-            if (master && account?.verifyPassword(password) != true) error("неверный мастер-пароль")
+            if (master && account?.verifyPassword(password) != true) error(str(R.string.wrong_master_password))
             e.exportVault(password, now())
         }.onSuccess { ui { onReady(it) } }.onFailure { ui { onError(it.message ?: it.javaClass.simpleName) } }
     }
@@ -373,8 +401,8 @@ class VaultController(private val context: Context) {
     fun writeExport(uri: Uri, file: String) = worker.execute {
         val count = engine?.let { JSONArray(it.records()).length() } ?: 0
         runCatching {
-            (context.contentResolver.openOutputStream(uri, "wt") ?: error("файл не открывается для записи")).use { it.write(file.toByteArray()) }
-        }.onSuccess { notice("файл экспорта сохранен, записей: $count") }.onFailure { notice("файл не сохранен: ${it.message}") }
+            (context.contentResolver.openOutputStream(uri, "wt") ?: error(str(R.string.file_not_writable))).use { it.write(file.toByteArray()) }
+        }.onSuccess { notice(R.string.export_saved, count) }.onFailure { notice(R.string.file_not_saved, it.message.orEmpty()) }
     }
 
     /** Импорт файла экспорта: слияние по HLC, новые и измененные записи публикуются. */
@@ -386,14 +414,15 @@ class VaultController(private val context: Context) {
             refresh()
             output.getJSONObject("imported")
         }.onSuccess { stats ->
-            val skipped = stats.getInt("skipped").takeIf { it > 0 }?.let { ", пропущено: $it" }.orEmpty()
-            notice("импорт: новых ${stats.getInt("added")}, обновлено ${stats.getInt("updated")}, без изменений ${stats.getInt("unchanged")}$skipped")
+            val (added, updated, unchanged, skipped) = listOf("added", "updated", "unchanged", "skipped").map(stats::getInt)
+            if (skipped > 0) notice(R.string.import_result_skipped, added, updated, unchanged, skipped)
+            else notice(R.string.import_result, added, updated, unchanged)
             ui { onDone() }
         }.onFailure { ui { onError(it.message ?: it.javaClass.simpleName) } }
     }
 
     private fun readLimited(uri: Uri): String {
-        val input = context.contentResolver.openInputStream(uri) ?: error("файл не открывается")
+        val input = context.contentResolver.openInputStream(uri) ?: error(str(R.string.file_not_readable))
         val out = ByteArrayOutputStream()
         input.use {
             val buffer = ByteArray(64 * 1024)
@@ -401,7 +430,7 @@ class VaultController(private val context: Context) {
                 val n = it.read(buffer)
                 if (n < 0) break
                 out.write(buffer, 0, n)
-                if (out.size() > IMPORT_MAX_BYTES) error("файл слишком большой для экспорта InkVault")
+                if (out.size() > IMPORT_MAX_BYTES) error(str(R.string.file_too_large))
             }
         }
         return String(out.toByteArray(), Charsets.UTF_8)
@@ -416,17 +445,17 @@ class VaultController(private val context: Context) {
         val c = conn
         val a = account
         runCatching {
-            if (c == null || a == null || !online) error("нет соединения с сервером")
+            if (c == null || a == null || !online) error(str(R.string.not_connected))
             val server = fetchAccount(c)
-            if (server != null && a.refresh(server) == AccountSync.FOREIGN) error("на сервере другая учетная запись хранилища")
+            if (server != null && a.refresh(server) == AccountSync.FOREIGN) error(str(R.string.account_foreign))
             val json = a.changePassword(current, newPassword)
             store.saveAccount(json)
             // копия на устройстве уже новая: при следующей сверке ядро выберет ее и потребует публикации
             runCatching { publishAccount(c, json) }.onFailure {
-                error("мастер-пароль изменен на этом устройстве, но не отправлен на сервер (${it.message}). Он будет отправлен при следующем подключении")
+                error(str(R.string.password_not_published, it.message.orEmpty()))
             }
         }.onSuccess {
-            notice("мастер-пароль изменен")
+            notice(R.string.password_changed)
             ui { onDone() }
         }.onFailure { ui { onError(it.message ?: it.javaClass.simpleName) } }
     }
@@ -441,7 +470,7 @@ class VaultController(private val context: Context) {
             publishAccount(c, current.accountJson())
             engine?.sessionLost()
             sync(pep, false)
-        }.onSuccess { notice("учетная запись на сервере заменена") }.onFailure { notice("не удалось заменить: ${it.message}") }
+        }.onSuccess { notice(R.string.account_replaced) }.onFailure { notice(R.string.account_replace_failed, it.message.orEmpty()) }
     }
 
     /**
@@ -466,7 +495,7 @@ class VaultController(private val context: Context) {
     fun purgeTrash() = withEngine { e ->
         val count = Item.parse(e.records()).count { it.deleted }
         apply(e.purgeTrash(now()))
-        notice("корзина очищена, удалено записей: $count")
+        notice(R.string.trash_purged, count)
     }
 
     /**
@@ -476,8 +505,8 @@ class VaultController(private val context: Context) {
     fun deleteVault(masterPassword: String, onError: (String) -> Unit) = worker.execute {
         val c = conn
         val problem = when {
-            runCatching { account?.verifyPassword(masterPassword) }.getOrNull() != true -> "неверный мастер-пароль"
-            c == null || !online -> "нет соединения с сервером"
+            runCatching { account?.verifyPassword(masterPassword) }.getOrNull() != true -> str(R.string.wrong_master_password)
+            c == null || !online -> str(R.string.not_connected)
             else -> null
         }
         if (problem != null) {
@@ -497,12 +526,12 @@ class VaultController(private val context: Context) {
             worker.execute {
                 result.onSuccess {
                     store.forgetVault()
-                    notice("хранилище удалено с сервера и с этого устройства")
+                    notice(R.string.vault_deleted)
                     ui {
                         biometricEnabled = false
                         screen = Screen.Login
                     }
-                }.onFailure { notice("хранилище не удалено: ${it.message}") }
+                }.onFailure { notice(R.string.vault_not_deleted, it.message.orEmpty()) }
             }
         }
     }
@@ -510,7 +539,7 @@ class VaultController(private val context: Context) {
     private fun withEngine(action: (VaultSync) -> Unit) {
         worker.execute {
             val e = engine ?: return@execute
-            runCatching { action(e) }.onFailure { notice("не сохранено: ${it.message}") }
+            runCatching { action(e) }.onFailure { notice(R.string.not_saved, it.message.orEmpty()) }
             refresh()
         }
     }
@@ -529,8 +558,12 @@ class VaultController(private val context: Context) {
         locked = false
         // items обновляется в главном потоке позже, поэтому число записей берется из результата refresh
         val loaded = refresh()
-        if (snapshot != null) notice("из кэша: записей ${loaded.size}")
-        ui { screen = Screen.Vault }
+        if (snapshot != null) notice(R.string.from_cache, loaded.size)
+        ui {
+            screen = Screen.Vault
+            userActive()
+            checkAutoLock()
+        }
     }
 
     private fun refresh(): List<Item> {
@@ -580,7 +613,7 @@ class VaultController(private val context: Context) {
 
     private fun connect(settings: Settings, password: String): XMPPTCPConnection {
         ui { status = Status.CONNECTING }
-        val (local, domain) = settings.jid.split("@").also { require(it.size == 2) { "JID нужно указать в виде имя@сервер" } }
+        val (local, domain) = settings.jid.split("@").also { require(it.size == 2) { str(R.string.jid_format) } }
         val builder = XMPPTCPConnectionConfiguration.builder()
             .setXmppDomain(domain)
             .setUsernameAndPassword(local, password)
@@ -598,7 +631,7 @@ class VaultController(private val context: Context) {
             // поиск сервера по SRV идет в этом потоке: Error из MiniDNS или Smack, не перехваченный здесь, завершает процесс
             Log.w("InkVault", "подключение к ${settings.jid} не удалось", e)
             ui { status = Status.OFFLINE }
-            throw ConnectionFailed(describe(e), e)
+            throw ConnectionFailed(describe(context, e), e)
         }
     }
 
@@ -610,10 +643,10 @@ class VaultController(private val context: Context) {
         try {
             attach(connect(settings, password))
         } catch (e: Exception) {
-            val reason = if (e is ConnectionFailed) e.message.orEmpty() else describe(e)
+            val reason = if (e is ConnectionFailed) e.message.orEmpty() else describe(context, e)
             // с неверным паролем повтор не поможет, а частые попытки входа сервер может заблокировать
             val again = e.cause !is SASLErrorException
-            if (reason != shownProblem) notice(if (again) "$reason, повтор через ${RETRY_MS / 1000} с" else reason)
+            if (reason != shownProblem) notice(if (again) str(R.string.connection_retry, reason, RETRY_MS / 1000) else reason)
             shownProblem = reason
             ui {
                 connectionProblem = reason
@@ -645,7 +678,7 @@ class VaultController(private val context: Context) {
                     if (locked) return@execute
                     ui {
                         status = Status.OFFLINE
-                        connectionProblem = "соединение прервано"
+                        connectionProblem = str(R.string.connection_lost)
                         retryAt = System.currentTimeMillis() + 1000
                     }
                     main.removeCallbacks(retry)
@@ -675,14 +708,14 @@ class VaultController(private val context: Context) {
             fetchAccount(c)
         } catch (e: Exception) {
             Log.w("InkVault", "учетная запись с сервера не загружена", e)
-            notice("ошибка синхронизации: учетная запись с сервера не загружена")
+            notice(R.string.sync_account_not_loaded)
             return
         }
         val state = if (server == null) AccountSync.PUBLISH else current.refresh(server)
         if (state == AccountSync.FOREIGN) {
             online = false
             foreignAccount = server
-            if (!conflict) notice("на сервере другая учетная запись хранилища, синхронизация остановлена")
+            if (!conflict) notice(R.string.sync_foreign)
             conflict = true
             ui { status = Status.CONFLICT }
             return
@@ -693,9 +726,9 @@ class VaultController(private val context: Context) {
         when (state) {
             AccountSync.PUBLISH -> {
                 publishAccount(c, current.accountJson())
-                notice(if (server == null) "учетная запись восстановлена на сервере" else "на сервере была старая копия учетной записи, опубликована актуальная")
+                notice(if (server == null) R.string.sync_account_restored else R.string.sync_account_outdated)
             }
-            AccountSync.UPDATED -> notice("учетная запись обновлена с сервера")
+            AccountSync.UPDATED -> notice(R.string.sync_account_updated)
             else -> {}
         }
         online = true
@@ -706,10 +739,10 @@ class VaultController(private val context: Context) {
             retryAt = 0
         }
         warnings = mutableMapOf()
-        runCatching { pep.connected(resumed) }.onFailure { notice("ошибка синхронизации: ${it.message}") }
+        runCatching { pep.connected(resumed) }.onFailure { notice(R.string.sync_error, it.message.orEmpty()) }
         warnings?.forEach { (kind, seen) ->
             val (count, detail) = seen
-            notice(WARNING_SUMMARY[kind]?.invoke(count) ?: if (count > 1) "$detail (записей: $count)" else detail)
+            notice(WARNING_SUMMARY[kind]?.let { str(it, count) } ?: if (count > 1) str(R.string.warning_repeated, detail, count) else detail)
         }
         warnings = null
         save()

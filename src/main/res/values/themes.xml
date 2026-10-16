@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- тема окна видна до первого кадра Compose и на splash-экране Android 12+, поэтому светлая и темная
+         версии следуют системной теме, как и палитра Compose -->
+    <style name="Theme.InkVault" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

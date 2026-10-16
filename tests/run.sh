@@ -12,6 +12,11 @@ APK=build/outputs/apk/debug/inkvault-android-debug.apk
 # потоковая установка на Samsung Galaxy S10+ (Android 12) зависает без ошибки
 "$ADB" install --no-streaming -r "$APK" >/dev/null
 "$ADB" shell pm clear dev.inkov.inkvault >/dev/null
+# сценарий сверяет русские тексты интерфейса: с Android 13 язык задается приложению,
+# на более старых версиях нужен русский язык системы
+if [ "$("$ADB" shell getprop ro.build.version.sdk | tr -d '\r')" -ge 33 ]; then
+    "$ADB" shell cmd locale set-app-locales dev.inkov.inkvault --locales ru-RU
+fi
 
 # e2e.py перезапускает и останавливает этот контейнер: восстановление на чистом сервере и сервер без связи
 export PROSODY_CONTAINER=inkvault-android-ui

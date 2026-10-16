@@ -3,3 +3,7 @@
 build/
 local.properties
 __pycache__/
+signing.properties
+*.p12
+*.jks
+*.keystore
