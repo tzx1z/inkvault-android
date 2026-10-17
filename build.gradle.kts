@@ -48,7 +48,7 @@ android {
         }
     }
 
-    // блок зависимостей шифруется ключом Google Play и нужен только ему, APK распространяется через GitLab
+    // блок зависимостей шифруется ключом Google Play и нужен только ему, APK распространяется вне Google Play
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false

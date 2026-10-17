@@ -1,105 +1,110 @@
-# InkVault для Android
+# InkVault for Android
 
-Android-клиент InkVault - менеджера паролей для самостоятельного размещения со сквозным шифрованием и синхронизацией через XMPP-сервер.
+Android client for InkVault, a self-hosted password manager with end-to-end encryption and sync over XMPP.
 
-Хранилище живет на вашем XMPP-сервере (например, Prosody) в узлах PEP вашей учетной записи. Сервер хранит только шифротекст, мастер-пароль не покидает телефон. Тот же формат используют web-клиент и терминальный клиент, изменения доходят до других устройств за 1-2 секунды.
+The vault lives on your own XMPP server (for example, Prosody) in the PEP nodes of your account. The server stores only ciphertext, and the master password never leaves the phone. The web and terminal clients use the same format, and changes reach other devices within 1-2 seconds.
 
-## Возможности
+## Features
 
-- Создание хранилища или вход в существующее: JID, пароль XMPP и мастер-пароль.
-- Разблокировка мастер-паролем или отпечатком пальца.
-- Список с поиском, фильтры "Все", "Избранное", "Корзина" и дерево тегов.
-- Записи: название, адрес, логин, пароль, заметка, теги, избранное, история паролей.
-- Генератор паролей.
-- Пароль вида PIN + одноразовый код (TOTP): готовый пароль считается при показе, с отсчетом до смены кода.
-- Работа без сети: хранилище открывается из зашифрованного кэша, изменения отправляются после подключения.
-- Резервная копия: зашифрованный экспорт и импорт через системный диалог файлов, файлы совместимы с другими клиентами.
-- Смена мастер-пароля, очистка корзины, полное удаление хранилища.
-- Восстановление: если сервер потерял данные или вернулся из старого бэкапа, телефон возвращает на сервер учетную запись и записи.
-- Интерфейс на русском и английском: язык берется из настроек системы, в Android 13 и новее его можно выбрать для приложения отдельно. Для остальных языков системы - английский.
+- Create a new vault or sign in to an existing one with a JID, XMPP password and master password.
+- Unlock with the master password or a fingerprint.
+- Searchable list with "All", "Favorites" and "Trash" filters and a tag tree.
+- Records: name, URL, username, password, notes, tags, favorite flag, password history.
+- Password generator.
+- PIN + one-time code (TOTP) passwords: the full password is computed when shown, with a countdown to the next code.
+- Offline mode: the vault opens from an encrypted cache, and changes are sent once the connection is back.
+- Backup: encrypted export and import through the system file picker, compatible with the other clients.
+- Master password change, emptying the trash, deleting the whole vault.
+- Recovery: if the server lost its data or was restored from an old backup, the phone uploads the account and records back to it.
+- English and Russian interface. The language follows the system settings, and on Android 13 and newer it can be set per app. Other system languages get English.
 
-Защита на устройстве:
+On-device protection:
 
-- окно приложения закрыто для снимков экрана (`FLAG_SECURE`), резервное копирование приложения выключено;
-- хранилище блокируется после 15 минут без действий пользователя, в том числе когда приложение свернуто;
-- скопированный пароль помечается как секретный и удаляется из буфера обмена через 45 секунд;
-- ключ быстрой разблокировки хранится в Android Keystore и требует отпечаток на каждую операцию;
-- пароль XMPP хранится зашифрованным ключом Android Keystore.
+- the app window is excluded from screenshots (`FLAG_SECURE`), and app data backup is disabled;
+- the vault locks after 15 minutes without user activity, including while the app is in the background;
+- a copied password is marked as sensitive and cleared from the clipboard after 45 seconds;
+- the quick unlock key is kept in Android Keystore and requires a fingerprint for every use;
+- the XMPP password is encrypted with an Android Keystore key.
 
-Требуется Android 8.0 (API 26) или новее, процессор arm64-v8a или x86_64.
+Requires Android 8.0 (API 26) or newer on an arm64-v8a or x86_64 device.
 
-## Установка
+## Installation
 
-Готовые APK - на странице [релизов](https://gitlab.com/inkvault/inkvault-android/-/releases). Ниже - сборка из исходников.
+Prebuilt APKs are on the [releases](https://github.com/tzx1z/inkvault-android/releases) page. Building from source is described below.
 
-Релизы подписаны сертификатом с отпечатком SHA-256:
+Releases are signed with a certificate with this SHA-256 fingerprint:
 
 ```
 6A:F0:58:1D:98:BF:5D:1C:0E:7C:46:B5:AF:B9:16:25:07:B3:B4:32:4A:7D:67:93:E5:05:CB:D4:F5:FD:83:B8
 ```
 
-Проверка скачанного APK: `apksigner verify --print-certs inkvault-android-release.apk`, строка `certificate SHA-256 digest`.
+To verify a downloaded APK, run `apksigner verify --print-certs inkvault-android-release.apk` and compare the `certificate SHA-256 digest` line.
 
-## Требования к серверу
+## Server requirements
 
-Prosody 13 или другой XMPP-сервер с PEP (XEP-0163), `publish-options` и Stream Management (XEP-0198).
+Prosody 13 or another XMPP server with PEP (XEP-0163), `publish-options` and Stream Management (XEP-0198).
 
-Клиент работает с настройками Prosody по умолчанию: новое хранилище создается с лимитом 256 записей, это `pep_max_items` по умолчанию. В лимит входят и записи в корзине. Для хранилищ больше 256 записей рекомендуется поднять лимит на сервере:
+The client works with the default Prosody settings: a new vault is created with a limit of 256 records, which is the default `pep_max_items`. Records in the trash count toward the limit. For vaults larger than 256 records, raise the limit on the server:
 
 ```lua
 pep_max_items = 10000
 ```
 
-После этого лимит узла хранилища поднимается в меню "Еще" - "Лимит записей". Новое значение применяется сразу и действует на всех устройствах: остальные клиенты читают лимит узла с сервера. Лимит больше `pep_max_items` сервер не примет, а меньше числа записей клиент не установит: при уменьшении сервер удалил бы старые записи. Подробности - в [описании протокола](https://gitlab.com/inkvault/inkvault-core/-/blob/main/docs/protocol.md).
+After that, raise the vault node limit in the app under "More" - "Item limit". The new value applies immediately on all devices, since the other clients read the node limit from the server. The server rejects a limit above `pep_max_items`, and the client does not allow a limit below the current number of records: lowering it would make the server delete the oldest records.
 
-## Сборка
+## Building
 
-Ядро подключено как AAR `dev.inkov.inkvault:inkvault-core-android` из реестра пакетов GitLab группы `inkvault`, его публикует CI проекта `inkvault-core`. Версия ядра задана в `build.gradle.kts`.
+Requirements:
 
-Нужны:
+- JDK 17 (`./gradlew` downloads Gradle 9.7.1 on first run, the distribution checksum is pinned in `gradle/wrapper/gradle-wrapper.properties`);
+- Android SDK with platform 37, path in `local.properties` (`sdk.dir=...`) or in `ANDROID_HOME`.
 
-- JDK 17 (Gradle 9.7.1 скачивает `./gradlew` при первом запуске, контрольная сумма дистрибутива зафиксирована в `gradle/wrapper/gradle-wrapper.properties`);
-- Android SDK с платформой 37;
-- токен GitLab в `~/.gradle/gradle.properties`: personal access token со scope `read_api` или deploy token со scope `read_package_registry`. В CI вместо него используется токен задания:
-
-```
-gitlabToken=<токен>
-```
+The app depends on the AAR `dev.inkov.inkvault:inkvault-core-android` from [inkvault-core](https://github.com/tzx1z/inkvault-core). Its version is set in `build.gradle.kts`. By default Gradle fetches it from the project's GitLab package registry, which requires an access token (see below). Without one, build the core from source and publish it to the local Maven repository. This needs the Rust and Android NDK setup from the core README. Check out the core tag that matches the version in `build.gradle.kts`:
 
 ```sh
-git clone git@gitlab.com:inkvault/inkvault-android.git
-cd inkvault-android
+git clone https://github.com/tzx1z/inkvault-core.git
+git clone https://github.com/tzx1z/inkvault-android.git
 
-./gradlew assembleDebug                    # build/outputs/apk/debug/inkvault-android-debug.apk
+(cd inkvault-core && git checkout v0.2.1 && bindings/build.sh android \
+    && cd bindings/uniffi/android && ./gradlew publishToMavenLocal)
+
+cd inkvault-android
+./gradlew assembleDebug -PinkvaultCoreLocal      # build/outputs/apk/debug/inkvault-android-debug.apk
 adb install build/outputs/apk/debug/inkvault-android-debug.apk
 ```
 
-Путь к Android SDK задается в `local.properties` (`sdk.dir=...`) или переменной `ANDROID_HOME`.
+With `-PinkvaultCoreLocal` the core is taken only from `mavenLocal()`.
 
-### Release-сборка
-
-Release-APK подписывается ключом из `signing.properties` в корне репозитория. Файл в `.gitignore`, ключ хранится вне репозитория:
+GitLab package registry access: a personal access token with the `read_api` scope or a deploy token with the `read_package_registry` scope in `~/.gradle/gradle.properties`. In GitLab CI the job token is used instead.
 
 ```
-keystore=/home/<пользователь>/.keystores/inkvault-release.p12
-keystore.password=<пароль хранилища и ключа>
+gitlabToken=<token>
+```
+
+### Release build
+
+The release APK is signed with the key from `signing.properties` in the repository root. The file is listed in `.gitignore`, and the key itself is stored outside the repository:
+
+```
+keystore=/home/<user>/.keystores/inkvault-release.p12
+keystore.password=<keystore and key password>
 keystore.alias=inkvault
 ```
 
-Путь к ключу абсолютный, `~` не раскрывается. Пароль хранилища и ключа один и тот же: в PKCS12 они совпадают. Без `signing.properties` получается неподписанный APK, при неполном файле сборка останавливается с ошибкой. Права на файл - `600`.
+The key path must be absolute, `~` is not expanded. In PKCS12 the keystore and key passwords are the same. Without `signing.properties` the release APK is unsigned, and an incomplete file stops the build with an error. Keep the file at mode `600`.
 
 ```sh
 ./gradlew assembleRelease                  # build/outputs/apk/release/inkvault-android-release.apk
 apksigner verify --print-certs build/outputs/apk/release/inkvault-android-release.apk
 ```
 
-`apksigner` лежит в `$ANDROID_HOME/build-tools/<версия>/`. Отпечаток сертификата в выводе должен совпадать с отпечатком из раздела "Установка".
+`apksigner` is in `$ANDROID_HOME/build-tools/<version>/`.
 
-Перед релизом увеличить `versionCode` и `versionName` в `build.gradle.kts`: APK с меньшим `versionCode` Android не установит поверх текущей версии.
+Before a release, increase `versionCode` and `versionName` in `build.gradle.kts`: Android does not install an APK with a lower `versionCode` over the current version.
 
-Обновить установленное приложение можно только APK, подписанным тем же ключом. Поэтому файл ключа и пароль хранятся в резервной копии вне этого компьютера: при потере ключа выпуск обновлений для установленных копий невозможен. По той же причине debug-сборку нельзя обновить до release: приложение удаляется вместе с локальными данными (кэш хранилища, ключ быстрой разблокировки, пароль XMPP), хранилище на сервере остается, вход выполняется заново.
+An installed app can only be updated with an APK signed by the same key, so the key file and its password must be backed up outside the build machine. If the key is lost, installed copies cannot receive updates. For the same reason, a debug build cannot be updated to a release build: the app has to be uninstalled together with its local data (vault cache, quick unlock key, XMPP password). The vault on the server is kept, and the user signs in again.
 
-Ключ создан командой:
+The release key was created with:
 
 ```sh
 keytool -genkeypair -keystore ~/.keystores/inkvault-release.p12 -storetype PKCS12 -alias inkvault \
@@ -107,57 +112,43 @@ keytool -genkeypair -keystore ~/.keystores/inkvault-release.p12 -storetype PKCS1
     -dname "CN=Evgeny Inkov, EMAILADDRESS=me@inkov.dev, O=InkVault"
 ```
 
-Пока репозиторий `inkvault-android` на GitLab закрыт, клонирование идет по SSH-ключу, добавленному в GitLab. В CI ядро загружается с токеном задания, если `inkvault-android` или вся группа `inkvault` есть в списке доступа токена в настройках `inkvault-core` (CI/CD - Job token permissions).
+## Tests
 
-Обновление ядра до новой версии: номер версии в зависимости `dev.inkov.inkvault:inkvault-core-android` в `build.gradle.kts` и в `tests/package.json`, затем `(cd tests && npm install)`.
+The end-to-end test drives the app on a phone over USB with adb and uiautomator: vault creation, sync with another client, PIN + code, export and import, server recovery, master password change. The test server runs in podman, and the phone reaches it through `adb reverse`.
 
-Сборка с неопубликованным ядром из соседнего каталога `../inkvault-core`:
-
-```sh
-(cd ../inkvault-core && bindings/build.sh android && cd bindings/uniffi/android && ./gradlew publishToMavenLocal)
-./gradlew assembleDebug -PinkvaultCoreLocal
-```
-
-Версия ядра в `build.gradle.kts` должна совпадать с версией в `Cargo.toml` соседнего ядра.
-
-## Тесты
-
-Сквозной тест управляет приложением на телефоне по USB через adb и uiautomator: создание хранилища, синхронизация с другим клиентом, PIN + код, экспорт и импорт, восстановление сервера, смена мастер-пароля. Тестовый сервер запускается в podman, телефон подключается к нему через `adb reverse`.
+The test uses `@inkov-dev/inkvault-testkit`, the core WebAssembly build for Node and the `registry.gitlab.com/inkvault/inkvault-core/test-prosody` image of the same version. All three come from the GitLab registries of `inkvault-core` and require a token with the `read_api` and `read_registry` scopes.
 
 ```sh
-podman login registry.gitlab.com     # один раз, токен со scope read_registry
-npm config set -- //gitlab.com/api/v4/projects/inkvault%2Finkvault-core/packages/npm/:_authToken <токен>   # один раз
-(cd tests && npm ci)                 # @inkov-dev/inkvault-testkit и ядро в WASM для Node из реестра GitLab
+podman login registry.gitlab.com     # once
+npm config set -- //gitlab.com/api/v4/projects/inkvault%2Finkvault-core/packages/npm/:_authToken <token>   # once
+(cd tests && npm ci)
 ./gradlew assembleDebug
-tests/run.sh                         # с --biometric - еще и разблокировка отпечатком
+tests/run.sh                         # --biometric also tests fingerprint unlock
 ```
 
-Тестовый сервер - образ `registry.gitlab.com/inkvault/inkvault-core/test-prosody` той же версии, что и `@inkov-dev/inkvault-testkit` в `tests/package.json`. Нужны podman и Node.js 22. Тест очищает данные приложения на телефоне. Сценарий сверяет русские тексты интерфейса: на Android 13 и новее `run.sh` включает приложению русский язык, на более старых версиях нужен русский язык системы.
+Requires podman and Node.js 22. The test clears the app data on the phone. The scenario checks Russian UI strings: on Android 13 and newer `run.sh` sets Russian as the app language, older versions need Russian as the system language.
 
-Лицензии зависимостей APK:
+Dependency license check for the APK:
 
 ```sh
 python3 -I tools/licenses.py
 ```
 
-## Структура
+## Layout
 
-| Путь | Содержимое |
-|------|------------|
-| `src/main/kotlin/dev/inkov/inkvault/android/` | приложение: экраны на Jetpack Compose, контроллер хранилища, биометрия, буфер обмена |
-| `src/main/kotlin/dev/inkov/inkvault/pep/` | адаптер PEP для движка синхронизации ядра на Smack |
+| Path | Contents |
+|------|----------|
+| `src/main/kotlin/dev/inkov/inkvault/android/` | the app: Jetpack Compose screens, vault controller, biometrics, clipboard |
+| `src/main/kotlin/dev/inkov/inkvault/pep/` | PEP adapter for the core sync engine, built on Smack |
 | `gradlew`, `gradle/wrapper/` | Gradle Wrapper |
-| `tests/` | сквозной тест на телефоне |
-| `art/` | исходники иконки и логотипа в SVG |
+| `tests/` | end-to-end test on a phone |
+| `tools/licenses.py` | dependency license check |
+| `art/` | icon and logo sources in SVG |
 
-## Лицензия
+## License
 
 [GNU AGPL v3.0](LICENSE) (`AGPL-3.0-only`). Copyright (C) 2026 Evgeny Inkov.
 
-## Автор
+## Contact
 
-Evgeny Inkov
-
-- Почта: [me@inkov.dev](mailto:me@inkov.dev)
-- XMPP: [tzx1z@inkov.dev](xmpp:tzx1z@inkov.dev)
-- Сайт: [inkov.dev](https://inkov.dev)
+Evgeny Inkov: [me@inkov.dev](mailto:me@inkov.dev), XMPP [tzx1z@inkov.dev](xmpp:tzx1z@inkov.dev), [inkov.dev](https://inkov.dev)
