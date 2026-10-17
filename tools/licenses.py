@@ -18,7 +18,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-GRADLE_CACHE = os.path.expanduser("~/.gradle/caches/modules-2/files-2.1")
+GRADLE_HOME = os.environ.get("GRADLE_USER_HOME") or os.path.expanduser("~/.gradle")
+GRADLE_CACHE = os.path.join(GRADLE_HOME, "caches/modules-2/files-2.1")
 POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 
 # Лицензии, совместимые с AGPL-3.0: код под ними можно распространять в составе программы под AGPL.
@@ -125,6 +126,10 @@ def android(gradle: str) -> list[tuple[str, str]]:
             coordinates.add((group, artifact, resolved or version))
     result = []
     for group, artifact, version in sorted(coordinates):
+        # ядро - часть проекта под той же лицензией, в его POM лицензии нет, а в релизе на GitHub нет и POM
+        if group == "dev.inkov.inkvault":
+            result.append((f"{group}:{artifact}:{version}", "AGPL-3.0-only"))
+            continue
         # несколько лицензий в POM у этих библиотек - выбор одной из них (JNA, MiniDNS)
         licenses = pom_licenses(group, artifact, version)
         result.append((f"{group}:{artifact}:{version}", " OR ".join(licenses) or "не найдена в POM"))

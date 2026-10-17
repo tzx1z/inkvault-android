@@ -38,7 +38,7 @@ Releases are signed with a certificate with this SHA-256 fingerprint:
 6A:F0:58:1D:98:BF:5D:1C:0E:7C:46:B5:AF:B9:16:25:07:B3:B4:32:4A:7D:67:93:E5:05:CB:D4:F5:FD:83:B8
 ```
 
-To verify a downloaded APK, run `apksigner verify --print-certs inkvault-android-release.apk` and compare the `certificate SHA-256 digest` line.
+To verify a downloaded APK, run `apksigner verify --print-certs inkvault-android-<version>.apk` and compare the `certificate SHA-256 digest` line.
 
 ## Server requirements
 
@@ -59,26 +59,27 @@ Requirements:
 - JDK 17 (`./gradlew` downloads Gradle 9.7.1 on first run, the distribution checksum is pinned in `gradle/wrapper/gradle-wrapper.properties`);
 - Android SDK with platform 37, path in `local.properties` (`sdk.dir=...`) or in `ANDROID_HOME`.
 
-The app depends on the AAR `dev.inkov.inkvault:inkvault-core-android` from [inkvault-core](https://github.com/tzx1z/inkvault-core). Its version is set in `build.gradle.kts`. By default Gradle fetches it from the project's GitLab package registry, which requires an access token (see below). Without one, build the core from source and publish it to the local Maven repository. This needs the Rust and Android NDK setup from the core README. Check out the core tag that matches the version in `build.gradle.kts`:
-
 ```sh
-git clone https://github.com/tzx1z/inkvault-core.git
 git clone https://github.com/tzx1z/inkvault-android.git
-
-(cd inkvault-core && git checkout v0.2.1 && bindings/build.sh android \
-    && cd bindings/uniffi/android && ./gradlew publishToMavenLocal)
-
 cd inkvault-android
-./gradlew assembleDebug -PinkvaultCoreLocal      # build/outputs/apk/debug/inkvault-android-debug.apk
+
+./gradlew assembleDebug                    # build/outputs/apk/debug/inkvault-android-debug.apk
 adb install build/outputs/apk/debug/inkvault-android-debug.apk
 ```
 
-With `-PinkvaultCoreLocal` the core is taken only from `mavenLocal()`.
+The app depends on the AAR `dev.inkov.inkvault:inkvault-core-android` from [inkvault-core](https://github.com/tzx1z/inkvault-core), its version is set in `build.gradle.kts`. Gradle downloads the AAR from the matching [core release](https://github.com/tzx1z/inkvault-core/releases). The release has no POM, so JNA is declared in `build.gradle.kts` explicitly.
 
-GitLab package registry access: a personal access token with the `read_api` scope or a deploy token with the `read_package_registry` scope in `~/.gradle/gradle.properties`. In GitLab CI the job token is used instead.
+Maintainers with access to the private GitLab package registry get the same AAR from there: a personal access token with the `read_api` scope or a deploy token with the `read_package_registry` scope in `~/.gradle/gradle.properties`. In GitLab CI the job token is used instead.
 
 ```
 gitlabToken=<token>
+```
+
+To build with a core built from source, publish it to the local Maven repository and pass `-PinkvaultCoreLocal`. This needs the Rust and Android NDK setup from the core README, and the version in the core `Cargo.toml` must match the one in `build.gradle.kts`:
+
+```sh
+(cd ../inkvault-core && bindings/build.sh android && cd bindings/uniffi/android && ./gradlew publishToMavenLocal)
+./gradlew assembleDebug -PinkvaultCoreLocal
 ```
 
 ### Release build
@@ -112,6 +113,27 @@ keytool -genkeypair -keystore ~/.keystores/inkvault-release.p12 -storetype PKCS1
     -dname "CN=Evgeny Inkov, EMAILADDRESS=me@inkov.dev, O=InkVault"
 ```
 
+### Release pipeline
+
+Releases are built in GitLab CI (`.gitlab-ci.yml`), GitHub only receives the code and the APK. Commits to `main` and merge requests get a debug APK and the license check. A `vX.Y.Z` tag runs:
+
+1. `release`: checks that the tag matches `versionName`, builds and signs the release APK, checks the licenses and the certificate fingerprint, and stores `inkvault-android-X.Y.Z.apk` as a job artifact.
+2. `publish-github`: pushes the tagged commit to `main` and the tag to GitHub, then creates a GitHub release with the APK. The release notes are the tag annotation. A rerun does not create a second release.
+
+GitLab settings:
+
+- `v*` tags are protected, since the variables below are protected;
+- `inkvault-android` is in the job token allowlist of `inkvault-core` (CI/CD - Job token permissions): jobs pull the core build image and the core AAR with the job token;
+- CI/CD variables, all protected:
+
+| Variable | Type | Value |
+|----------|------|-------|
+| `RELEASE_KEYSTORE` | File | the PKCS12 key in base64: `base64 -w0 ~/.keystores/inkvault-release.p12` |
+| `RELEASE_KEYSTORE_PASSWORD` | Variable, masked | the keystore and key password |
+| `GH_TOKEN` | Variable, masked | fine-grained GitHub token with Contents: read and write access to `tzx1z/inkvault-android` |
+
+Without `GH_TOKEN` the tag pipeline stops after `release`. The GitHub `main` branch only moves forward to the tagged commit: if it has commits that are not in GitLab, the push is rejected.
+
 ## Tests
 
 The end-to-end test drives the app on a phone over USB with adb and uiautomator: vault creation, sync with another client, PIN + code, export and import, server recovery, master password change. The test server runs in podman, and the phone reaches it through `adb reverse`.
@@ -143,6 +165,7 @@ python3 -I tools/licenses.py
 | `gradlew`, `gradle/wrapper/` | Gradle Wrapper |
 | `tests/` | end-to-end test on a phone |
 | `tools/licenses.py` | dependency license check |
+| `.gitlab-ci.yml` | build and release pipeline |
 | `art/` | icon and logo sources in SVG |
 
 ## License

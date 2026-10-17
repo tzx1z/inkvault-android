@@ -94,6 +94,9 @@ dependencies {
     implementation("org.igniterealtime.smack:smack-tcp:4.5.0")
     implementation("org.igniterealtime.smack:smack-extensions:4.5.0")
     implementation("org.igniterealtime.smack:smack-im:4.5.0")
-    // AAR ядра с Kotlin-биндингами и библиотеками, JNA приходит вместе с ним
-    implementation("dev.inkov.inkvault:inkvault-core-android:0.2.1")
+    // AAR ядра с Kotlin-биндингами и библиотеками. В релизе ядра на GitHub нет POM, поэтому @aar
+    // и JNA отдельно; версия JNA - как в bindings/uniffi/android/build.gradle.kts ядра.
+    // AAR-вариант JNA содержит libjnidispatch.so для Android, обычный JAR - только для настольных систем
+    implementation("dev.inkov.inkvault:inkvault-core-android:0.2.1@aar")
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
 }

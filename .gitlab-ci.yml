@@ -1,0 +1,111 @@
+# Пайплайн Android-клиента. На коммит в main и в merge request - debug-APK и проверка лицензий.
+# По тегу vX.Y.Z - подписанный release-APK, затем коммит тега, тег и релиз с APK на GitHub.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+stages: [build, publish]
+
+variables:
+  # образ сборки ядра: JDK, Android SDK с платформой 37 и build-tools 36.0.0. Образ и AAR ядра
+  # доступны заданиям, пока inkvault-android есть в списке доступа токена задания inkvault-core
+  ANDROID_IMAGE: registry.gitlab.com/inkvault/inkvault-core/ci-android:1
+  GIT_IMAGE: docker.io/library/buildpack-deps:trixie-scm
+  GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle-home
+  GITHUB_REPO: tzx1z/inkvault-android
+  # отпечаток сертификата из README: release-APK, подписанный другим ключом, не публикуется
+  RELEASE_CERT_SHA256: 6af0581d98bf5d1c0e7c46b5afb9162507b3b4324a7d6793e505cbd4f5fd83b8
+
+default:
+  interruptible: true
+
+.gradle-cache: &gradle-cache
+  key:
+    files: [gradle/wrapper/gradle-wrapper.properties, build.gradle.kts]
+    prefix: gradle
+  paths:
+    - .gradle-home/caches/
+    - .gradle-home/wrapper/
+
+debug:
+  stage: build
+  image: $ANDROID_IMAGE
+  cache: [*gradle-cache]
+  script:
+    - ./gradlew --no-daemon assembleDebug
+    - python3 -I tools/licenses.py
+  artifacts:
+    paths: [build/outputs/apk/debug/inkvault-android-debug.apk]
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG == null
+
+# RELEASE_KEYSTORE (файл с PKCS12 в base64), RELEASE_KEYSTORE_PASSWORD и GH_TOKEN - защищенные
+# переменные CI/CD, поэтому теги v* должны быть защищенными
+release:
+  stage: build
+  image: $ANDROID_IMAGE
+  cache: [*gradle-cache]
+  script:
+    - version=${CI_COMMIT_TAG#v}
+    - |
+      if [ "$version" != "$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' build.gradle.kts)" ]; then
+        echo "тег $CI_COMMIT_TAG не совпадает с versionName в build.gradle.kts" >&2
+        exit 1
+      fi
+    - base64 -d "$RELEASE_KEYSTORE" >release.p12
+    # в формате properties обратная косая черта экранирует следующий символ
+    - |
+      password=$(printf '%s' "$RELEASE_KEYSTORE_PASSWORD" | sed 's/\\/\\\\/g')
+      printf 'keystore=%s\nkeystore.password=%s\nkeystore.alias=inkvault\n' "$PWD/release.p12" "$password" >signing.properties
+    - ./gradlew --no-daemon assembleRelease
+    - python3 -I tools/licenses.py
+    - apk="inkvault-android-$version.apk"
+    - mv build/outputs/apk/release/inkvault-android-release.apk "$apk"
+    # grep без -q дочитывает вывод: с pipefail ранний выход grep завершил бы apksigner по SIGPIPE
+    - |
+      if ! "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" \
+          | grep -x "Signer #1 certificate SHA-256 digest: $RELEASE_CERT_SHA256" >/dev/null; then
+        echo "$apk подписан не ключом релизов" >&2
+        exit 1
+      fi
+  after_script:
+    - rm -f release.p12 signing.properties
+  artifacts:
+    paths: [inkvault-android-*.apk]
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG
+
+publish-github:
+  stage: publish
+  image: $GIT_IMAGE
+  interruptible: false
+  needs: [release]
+  variables:
+    # на GitHub уходит вся история тега
+    GIT_DEPTH: "0"
+    GH_VERSION: "2.97.0"
+    GH_SHA256: a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+  before_script:
+    - curl -fsSLo /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+    - echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c -
+    - tar -xzf /tmp/gh.tar.gz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_amd64/bin/gh"
+  script:
+    - gh auth setup-git
+    # main на GitHub только догоняет тег: если он ушел вперед или в сторону, push отклоняется
+    - git push "https://github.com/$GITHUB_REPO.git" "$CI_COMMIT_SHA:refs/heads/main" "refs/tags/$CI_COMMIT_TAG"
+    # повторный запуск не создает второй релиз; текст релиза - аннотация тега
+    - |
+      if gh release view "$CI_COMMIT_TAG" -R "$GITHUB_REPO" >/dev/null 2>&1; then
+        echo "релиз $CI_COMMIT_TAG на GitHub уже есть"
+      else
+        notes=$(git tag -l --format='%(contents)' "$CI_COMMIT_TAG")
+        gh release create "$CI_COMMIT_TAG" -R "$GITHUB_REPO" --verify-tag \
+          --title "${CI_COMMIT_TAG#v}" --notes "${notes:-$CI_COMMIT_TAG}" inkvault-android-*.apk
+      fi
+  rules:
+    - if: $CI_COMMIT_TAG && $GH_TOKEN
