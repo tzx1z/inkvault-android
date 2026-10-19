@@ -94,6 +94,12 @@ dependencies {
     implementation("org.igniterealtime.smack:smack-tcp:4.5.0")
     implementation("org.igniterealtime.smack:smack-extensions:4.5.0")
     implementation("org.igniterealtime.smack:smack-im:4.5.0")
+    // QR-код с секретом TOTP распознается на устройстве: ML Kit и сканер из Google Play Services
+    // закрытые и не работают на телефонах без сервисов Google
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-compose:1.6.2")
+    implementation("com.google.zxing:core:3.5.4")
     // AAR ядра с Kotlin-биндингами и библиотеками. В релизе ядра на GitHub нет POM, поэтому @aar
     // и JNA отдельно; версия JNA - как в bindings/uniffi/android/build.gradle.kts ядра.
     // AAR-вариант JNA содержит libjnidispatch.so для Android, обычный JAR - только для настольных систем

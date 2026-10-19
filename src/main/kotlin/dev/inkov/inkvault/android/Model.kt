@@ -4,9 +4,11 @@ import androidx.annotation.StringRes
 import org.json.JSONArray
 
 const val FAVORITE = "@favorite"
-val FIELDS = listOf("name", "url", "username", "password", "totp", "notes")
+// url - первый адрес сайта, urls - остальные по одному в строке: клиент без поддержки нескольких адресов работает с первым
+val FIELDS = listOf("name", "url", "urls", "username", "password", "totp", "notes")
 
-// пароль вида PIN + текущий код TOTP: PIN хранится в поле password, поэтому его смены попадают в историю
+// пароль для входа - поле password и текущий код TOTP после него. Сам пароль хранится в password,
+// поэтому его смены попадают в историю
 const val PASSWORD_MODE = "password_mode"
 const val PIN_TOTP = "pin_totp"
 
@@ -36,6 +38,7 @@ data class Item(
 
     val favorite get() = FAVORITE in tags
     val userTags get() = tags.filterNot { it.startsWith("@") }
+    val urls get() = (listOf(field("url")) + field("urls").lines()).map(String::trim).filter(String::isNotEmpty)
 
     companion object {
         fun parse(recordsJson: String): List<Item> {

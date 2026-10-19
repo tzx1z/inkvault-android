@@ -187,7 +187,6 @@ def fill_login(master: str) -> None:
         adb("shell", "input", "keyevent", "KEYCODE_DEL")
     adb("shell", "input", "text", "15222")
     hide_keyboard()
-    tap("insecure")
     tap("open")
 
 
@@ -291,6 +290,9 @@ def main() -> int:
 
     tap("new")
     type_into("f-name", "github.com")
+    type_into("f-url", "github.com")
+    tap("add-url")
+    type_into("f-url-1", "gist.github.com")
     type_into("f-username", "alice")
     tap("gen-password")
     tap("g-use")
@@ -298,15 +300,28 @@ def main() -> int:
     tap("save")
     tap("back")
     report(wait(text="github.com", timeout=20) is not None, "запись создана с паролем из генератора")
+    # "gist" есть только во втором адресе: запись видна в поиске, только если поиск идет по всем адресам
+    type_into("search", "gist")
+    found = wait(text="github.com", timeout=10) is not None
+    tap("search-clear")
+    hide_keyboard()
+    tap(text="github.com")
+    second = field_text("f-url-1")
+    report(found and second == "gist.github.com", "второй адрес записи сохранен и находится поиском", second)
+    tap("back")
 
     subprocess.run(["node", "vault.mjs", "add"], cwd=VAULT_CLI, check=True, capture_output=True, env={**os.environ, "MASTER_PASSWORD": MASTER})
     report(wait(text="prod-db", timeout=30) is not None, "запись с другого устройства пришла уведомлением")
 
-    # пароль вида PIN + одноразовый код
+    # код TOTP и пароль вида "пароль + код TOTP"
     tap("new")
     type_into("f-name", "vpn")
-    report(find(dump(), "f-totp") is None, "в режиме обычного пароля поля секрета TOTP нет")
-    tap("mode-pin-totp")
+    root = dump()
+    combined = find(root, "f-combined")
+    report(
+        find(root, "f-totp") is not None and combined is not None and combined.get("enabled") == "false",
+        "поле секрета TOTP есть сразу, без секрета режим пароль + код недоступен",
+    )
     type_into("f-totp", "0189")
     reveal("save")
     tap("save")
@@ -317,35 +332,50 @@ def main() -> int:
     report(not_saved and find(dump(), text="неверный секрет TOTP") is not None, "неверный секрет TOTP отмечен у поля, запись не сохранена")
     clear_field("f-totp", 4)
     type_into("f-totp", TOTP_SECRET)
-    hidden = reveal("otp-value").get("text", "")
-    report(hidden == "•" * 6, "готовый пароль скрыт по умолчанию", hidden)
-    reveal("otp-show")
-    tap("otp-show")
-    shown = wait("otp-value").get("text", "")
+    shown = reveal("totp-code").get("text", "")
     # время телефона, а не компьютера; код мог смениться между чтением и расчетом
     phone_time = int(adb("shell", "date", "+%s").strip())
     codes = [totp(TOTP_SECRET, t) for t in (phone_time, phone_time - 30)]
-    report(shown in codes, "без PIN готовый пароль - текущий код TOTP", shown if shown in codes else f"{shown}, ожидалось {' или '.join(codes)}")
-    reveal("f-password")
-    type_into("f-password", "pinpin")
-    shown = reveal("otp-value").get("text", "")
-    phone_time = int(adb("shell", "date", "+%s").strip())
-    expected = [f"pinpin{totp(TOTP_SECRET, t)}" for t in (phone_time, phone_time - 30)]
-    report(shown in expected, "готовый пароль - PIN и текущий код TOTP", shown if shown in expected else f"{shown}, ожидалось {' или '.join(expected)}")
-    before = wait("otp-remaining").get("text", "")
+    report(shown in codes, "поле кода TOTP показывает только текущий код", shown if shown in codes else f"{shown}, ожидалось {' или '.join(codes)}")
+    report(find(dump(), "combined-value") is None, "без флажка поля пароля с кодом нет")
+    before = wait("totp-remaining").get("text", "")
     after = before
     deadline = time.monotonic() + 5
     while after == before and time.monotonic() < deadline:
-        after = wait("otp-remaining").get("text", "")
+        after = wait("totp-remaining").get("text", "")
     report(before != after and re.fullmatch(r"обновится через \d+ с", after) is not None, "обратный отсчет обновляется", f"{before} -> {after}")
-    reveal("otp-copy")
-    tap("otp-copy")
-    report(wait(text="скопировано", timeout=10) is not None, "готовый пароль копируется")
+    reveal("totp-code-copy")
+    tap("totp-code-copy")
+    report(wait(text="скопировано", timeout=10) is not None, "код TOTP копируется")
+    tap("f-combined")
+    hidden = reveal("combined-value").get("text", "")
+    report(hidden == "•" * 6, "пароль с кодом скрыт по умолчанию", hidden)
+    reveal("f-password")
+    type_into("f-password", "pinpin")
+    reveal("combined-show")
+    tap("combined-show")
+    shown = reveal("combined-value").get("text", "")
+    phone_time = int(adb("shell", "date", "+%s").strip())
+    expected = [f"pinpin{totp(TOTP_SECRET, t)}" for t in (phone_time, phone_time - 30)]
+    report(shown in expected, "пароль с кодом - пароль и текущий код TOTP", shown if shown in expected else f"{shown}, ожидалось {' или '.join(expected)}")
+    reveal("combined-copy")
+    tap("combined-copy")
+    report(wait(text="скопировано", timeout=10) is not None, "пароль с кодом копируется")
     reveal("save")
     tap("save")
     tap("back")
     tap(text="vpn")
-    report(reveal("otp-show") is not None, "режим PIN + код сохранен в записи")
+    report(reveal("f-combined").get("checked") == "true", "режим пароль + код сохранен в записи")
+    tap("back")
+
+    # окно сканирования QR открывается с камерой без ошибки; распознавание кода камерой проверяется вручную
+    adb("shell", "pm", "grant", "dev.inkov.inkvault", "android.permission.CAMERA")
+    tap("new")
+    tap("scan-totp")
+    opened = wait("scan-cancel", timeout=15) is not None
+    time.sleep(2)
+    report(opened and find(dump(), "scan-error") is None, "окно сканирования QR открывается, камера доступна")
+    tap("scan-cancel")
     tap("back")
 
     # экспорт и импорт: файл из ядра WASM, как у web-клиента, открывается на телефоне, файл с телефона - в WASM

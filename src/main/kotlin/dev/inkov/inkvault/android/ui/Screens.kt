@@ -1,12 +1,25 @@
 package dev.inkov.inkvault.android.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Size
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.compose.CameraXViewfinder
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.lifecycle.awaitInstance
+import androidx.camera.viewfinder.core.ImplementationMode
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +29,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +48,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -74,14 +89,19 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -110,20 +130,27 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.inkov.inkvault.android.Biometric
 import dev.inkov.inkvault.android.BuildConfig
 import dev.inkov.inkvault.android.FAVORITE
 import dev.inkov.inkvault.android.Item
 import dev.inkov.inkvault.android.PASSWORD_MODE
 import dev.inkov.inkvault.android.PIN_TOTP
+import dev.inkov.inkvault.android.QrAnalyzer
 import dev.inkov.inkvault.android.R
 import dev.inkov.inkvault.android.Screen
 import dev.inkov.inkvault.android.Settings
 import dev.inkov.inkvault.android.Status
 import dev.inkov.inkvault.android.VaultController
 import dev.inkov.inkvault.android.copySecret
+import dev.inkov.inkvault.android.scannedSecretProblem
 import uniffi.inkvault_uniffi.generatePassword
 import java.time.LocalDate
+import java.util.concurrent.Executors
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import uniffi.inkvault_uniffi.passwordEntropy
 import uniffi.inkvault_uniffi.totp
@@ -182,6 +209,7 @@ private fun Field(
     onChange: (String) -> Unit,
     label: String,
     tag: String,
+    modifier: Modifier = Modifier,
     secret: Boolean = false,
     singleLine: Boolean = true,
     hint: String? = null,
@@ -200,7 +228,7 @@ private fun Field(
         singleLine = singleLine,
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
-        modifier = Modifier.fillMaxWidth().tag(tag),
+        modifier = modifier.fillMaxWidth().tag(tag),
     )
 }
 
@@ -219,18 +247,19 @@ private fun IconAction(icon: ImageVector, description: String, tag: String, onCl
 
 // Нажатие на всю строку, а не только на квадрат: больше область касания, TalkBack читает строку целиком
 @Composable
-private fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, label: String, tag: String? = null) {
+private fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, label: String, tag: String? = null, enabled: Boolean = true) {
     Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .toggleable(checked, role = Role.Checkbox, onValueChange = onChange)
+            .toggleable(checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChange)
             .then(if (tag != null) Modifier.tag(tag) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Checkbox(checked, onCheckedChange = null)
-        Text(label)
+        Checkbox(checked, onCheckedChange = null, enabled = enabled)
+        // прозрачность недоступного текста по Material 3, как у самого флажка
+        Text(label, color = if (enabled) Color.Unspecified else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
     }
 }
 
@@ -253,7 +282,6 @@ private fun LoginScreen(controller: VaultController) {
     var repeat by remember { mutableStateOf("") }
     var host by remember { mutableStateOf(saved?.host.orEmpty()) }
     var port by remember { mutableStateOf((saved?.port ?: 5222).toString()) }
-    var insecure by remember { mutableStateOf(saved?.insecure ?: false) }
     val noVault = controller.noVault
     var confirmOrphans by remember { mutableStateOf(false) }
     val resources = LocalResources.current
@@ -264,8 +292,7 @@ private fun LoginScreen(controller: VaultController) {
         Field(master, { master = it }, stringResource(R.string.master_password), "master-password", secret = true)
         Field(host, { host = it.trim() }, stringResource(R.string.login_host), "host", hint = stringResource(R.string.login_host_hint))
         Field(port, { port = it.filter(Char::isDigit) }, stringResource(R.string.login_port), "port")
-        CheckRow(insecure, { insecure = it }, stringResource(R.string.login_insecure), "insecure")
-        val settings = Settings(jid, host, port.toIntOrNull() ?: 5222, insecure)
+        val settings = Settings(jid, host, port.toIntOrNull() ?: 5222)
         Button({ controller.login(settings, xmppPassword, master, create = false) }, Modifier.fillMaxWidth().tag("open"), enabled = !controller.busy) {
             Text(stringResource(R.string.login_open))
         }
@@ -355,7 +382,7 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
             is Filter.Tag -> !item.deleted && item.userTags.any { it == f.tag || it.startsWith("${f.tag}/") }
         }
         val q = query.trim().lowercase()
-        inFilter && (q.isEmpty() || (listOf("name", "username", "url", "notes").map(item::field) + item.userTags).any { it.lowercase().contains(q) })
+        inFilter && (q.isEmpty() || (listOf("name", "username", "notes").map(item::field) + item.urls + item.userTags).any { it.lowercase().contains(q) })
     }.sortedBy { it.field("name").lowercase() }
 
     Scaffold(
@@ -737,7 +764,17 @@ private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
                             onClick = { master = isMaster; error = null },
                             shape = SegmentedButtonDefaults.itemShape(i, 2),
                             modifier = Modifier.tag(if (isMaster) "b-mode-master" else "b-mode-separate"),
-                        ) { Text(label) }
+                            // без галочки у выбранного сегмента: ширина подписи не зависит от выбора, размер шрифта не скачет
+                            icon = {},
+                        ) {
+                            // подпись в одну строку: если не помещается, уменьшается шрифт, а не переносится текст
+                            Text(
+                                label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                autoSize = TextAutoSize.StepBased(minFontSize = 11.sp, maxFontSize = LocalTextStyle.current.fontSize),
+                            )
+                        }
                     }
                 }
                 Text(
@@ -810,12 +847,23 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
     val context = LocalContext.current
     val resources = LocalResources.current
     val values = remember(item?.id) { mutableStateOf(dev.inkov.inkvault.android.FIELDS.associateWith { item?.field(it).orEmpty() }) }
+    // адреса правятся списком, при сохранении первый уходит в url, остальные - в urls
+    var urls by remember(item?.id) { mutableStateOf(item?.urls.orEmpty().ifEmpty { listOf("") }) }
     var tags by remember(item?.id) { mutableStateOf(item?.userTags?.joinToString(", ").orEmpty()) }
     var favorite by remember(item?.id) { mutableStateOf(item?.favorite ?: false) }
-    var pinMode by remember(item?.id) { mutableStateOf(item?.field(PASSWORD_MODE) == PIN_TOTP) }
+    var combined by remember(item?.id) { mutableStateOf(item?.field(PASSWORD_MODE) == PIN_TOTP) }
     var showPassword by remember { mutableStateOf(false) }
     var showSecret by remember { mutableStateOf(false) }
     var generator by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+    val lastUrl = remember { FocusRequester() }
+    var focusLastUrl by remember { mutableIntStateOf(0) }
+    LaunchedEffect(focusLastUrl) { if (focusLastUrl > 0) lastUrl.requestFocus() }
+    val hasCamera = remember { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
+    // разрешение запрашивается при первом сканировании, а не при запуске
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) scanning = true else controller.notice(R.string.camera_denied)
+    }
     fun set(name: String, value: String) {
         values.value = values.value + (name to value)
     }
@@ -823,6 +871,9 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
     val deleted = item?.deleted ?: false
     val secret = v["totp"].orEmpty().trim()
     val secretError = if (secret.isEmpty()) null else runCatching { totp(secret, 0u) }.exceptionOrNull()?.message
+    val secretValid = secret.isNotEmpty() && secretError == null
+    // без рабочего секрета режим выключен, но выбор остается: он вернется, когда секрет исправят
+    val combinedOn = combined && secretValid
 
     Scaffold(topBar = {
         TopAppBar(
@@ -845,46 +896,57 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Field(v["name"].orEmpty(), { set("name", it) }, stringResource(R.string.field_name), "f-name")
-            Field(v["url"].orEmpty(), { set("url", it) }, stringResource(R.string.field_url), "f-url")
+            urls.forEachIndexed { i, url ->
+                Field(
+                    url, { value -> urls = urls.toMutableList().also { it[i] = value } }, stringResource(R.string.field_url), if (i == 0) "f-url" else "f-url-$i",
+                    modifier = if (i == urls.lastIndex) Modifier.focusRequester(lastUrl) else Modifier,
+                ) {
+                    if (i == 0) {
+                        // пустое поле в конце уже есть - курсор переходит в него, второе пустое не добавляется
+                        IconAction(AppIcons.Add, stringResource(R.string.add_url), "add-url") {
+                            if (urls.last().isNotBlank()) urls = urls + ""
+                            focusLastUrl++
+                        }
+                    } else {
+                        IconAction(AppIcons.Close, stringResource(R.string.remove_url), "remove-url-$i") { urls = urls.filterIndexed { j, _ -> j != i } }
+                    }
+                }
+            }
             Field(v["username"].orEmpty(), { set("username", it) }, stringResource(R.string.field_username), "f-username") {
                 IconAction(AppIcons.Copy, stringResource(R.string.copy_username), "copy-username") {
                     controller.notice(copySecret(context, resources.getString(R.string.clip_username), v["username"].orEmpty()))
                 }
             }
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf(false to stringResource(R.string.mode_password), true to stringResource(R.string.mode_pin_totp)).forEachIndexed { i, (pin, label) ->
-                    SegmentedButton(
-                        selected = pinMode == pin,
-                        onClick = { pinMode = pin },
-                        shape = SegmentedButtonDefaults.itemShape(i, 2),
-                        modifier = Modifier.tag(if (pin) "mode-pin-totp" else "mode-password"),
-                    ) { Text(label) }
+            Field(
+                v["password"].orEmpty(), { set("password", it) }, stringResource(R.string.field_password), "f-password",
+                secret = !showPassword, hint = if (combinedOn) stringResource(R.string.combined_password_hint) else null,
+            ) {
+                IconAction(
+                    if (showPassword) AppIcons.VisibilityOff else AppIcons.Visibility,
+                    stringResource(if (showPassword) R.string.hide_password else R.string.show_password),
+                    "show-password",
+                ) { showPassword = !showPassword }
+                IconAction(AppIcons.Copy, stringResource(R.string.copy_password), "copy-password") {
+                    controller.notice(copySecret(context, resources.getString(R.string.clip_password), v["password"].orEmpty()))
                 }
+                IconAction(AppIcons.Key, stringResource(R.string.generate_password), "gen-password") { generator = true }
             }
             Field(
-                v["password"].orEmpty(), { set("password", it) }, if (pinMode) "PIN" else stringResource(R.string.field_password), "f-password",
-                secret = !showPassword, hint = if (pinMode) stringResource(R.string.pin_hint) else null,
+                v["totp"].orEmpty(), { set("totp", it) }, stringResource(R.string.totp_secret), "f-totp",
+                secret = !showSecret, hint = secretError ?: stringResource(R.string.totp_hint), error = secretError != null,
             ) {
-                val visibility = when {
-                    pinMode -> if (showPassword) R.string.hide_pin else R.string.show_pin
-                    else -> if (showPassword) R.string.hide_password else R.string.show_password
+                IconAction(if (showSecret) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (showSecret) R.string.hide_secret else R.string.show_secret), "show-totp") { showSecret = !showSecret }
+                if (hasCamera) {
+                    IconAction(AppIcons.QrCodeScanner, stringResource(R.string.scan_qr), "scan-totp") {
+                        if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scanning = true
+                        else cameraPermission.launch(Manifest.permission.CAMERA)
+                    }
                 }
-                IconAction(if (showPassword) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(visibility), "show-password") { showPassword = !showPassword }
-                IconAction(AppIcons.Copy, stringResource(if (pinMode) R.string.copy_pin else R.string.copy_password), "copy-password") {
-                    val label = resources.getString(if (pinMode) R.string.clip_pin else R.string.clip_password)
-                    controller.notice(copySecret(context, label, v["password"].orEmpty()))
-                }
-                IconAction(AppIcons.Key, stringResource(if (pinMode) R.string.generate_pin else R.string.generate_password), "gen-password") { generator = true }
             }
-            // секрет TOTP нужен только для пароля PIN + код; в обычном режиме сохраненное значение не меняется
-            if (pinMode) {
-                Field(
-                    v["totp"].orEmpty(), { set("totp", it) }, stringResource(R.string.totp_secret), "f-totp",
-                    secret = !showSecret, hint = secretError ?: stringResource(R.string.totp_hint), error = secretError != null,
-                ) {
-                    IconAction(if (showSecret) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (showSecret) R.string.hide_secret else R.string.show_secret), "show-totp") { showSecret = !showSecret }
-                }
-                if (secret.isNotEmpty() && secretError == null) OtpField(controller, v["password"].orEmpty(), secret)
+            if (secretValid) {
+                TotpFields(controller, v["password"].orEmpty(), secret, combinedOn) { combined = it }
+            } else {
+                CheckRow(false, {}, stringResource(R.string.password_plus_totp), "f-combined", enabled = false)
             }
             Field(v["notes"].orEmpty(), { set("notes", it) }, stringResource(R.string.field_notes), "f-notes", singleLine = false)
             Field(tags, { tags = it }, stringResource(R.string.field_tags), "f-tags", hint = stringResource(R.string.tags_hint))
@@ -893,18 +955,15 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!deleted) {
                     Button({
-                        val problem = when {
-                            !pinMode -> null
-                            secret.isEmpty() -> resources.getString(R.string.totp_required)
-                            else -> secretError
-                        }
-                        if (problem != null) {
-                            controller.notice(R.string.not_saved, problem)
+                        if (secretError != null) {
+                            controller.notice(R.string.not_saved, secretError)
                             return@Button
                         }
-                        var fields = if (pinMode) v + ("totp" to secret) else v
+                        // вставка в однострочное поле может принести перевод строки, а он разделяет адреса в urls
+                        val urlList = urls.flatMap { it.lines() }.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                        var fields = v + mapOf("url" to urlList.firstOrNull().orEmpty(), "urls" to urlList.drop(1).joinToString("\n"), "totp" to secret)
                         // режим пишется только при смене: незнакомое значение от более нового клиента не затирается
-                        if (pinMode != (item?.field(PASSWORD_MODE) == PIN_TOTP)) fields = fields + (PASSWORD_MODE to if (pinMode) PIN_TOTP else "")
+                        if (combinedOn != (item?.field(PASSWORD_MODE) == PIN_TOTP)) fields = fields + (PASSWORD_MODE to if (combinedOn) PIN_TOTP else "")
                         val tagList = tags.split(",").map { it.trim().trim('/') }.filter { it.isNotEmpty() } + if (favorite) listOf(FAVORITE) else emptyList()
                         if (item == null) {
                             controller.create(fields.filterValues { it.isNotEmpty() }, tagList) { id -> navigate(id) }
@@ -931,11 +990,12 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
         }
     }
     if (generator) GeneratorDialog(onUse = { set("password", it) }) { generator = false }
+    if (scanning) QrScanDialog(onResult = { set("totp", it); scanning = false }) { scanning = false }
 }
 
-// Готовый пароль не хранится: код TOTP меняется каждые 30 с, поэтому он считается при показе и копировании
+// Код и готовый пароль не хранятся: код TOTP меняется каждые period секунд, поэтому считается при показе и копировании
 @Composable
-private fun OtpField(controller: VaultController, pin: String, secret: String) {
+private fun TotpFields(controller: VaultController, password: String, secret: String, combined: Boolean, onCombinedChange: (Boolean) -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -947,28 +1007,120 @@ private fun OtpField(controller: VaultController, pin: String, secret: String) {
         }
     }
     val code = runCatching { totp(secret, now.toULong()) }.getOrNull() ?: return
+    // при копировании код берется на момент нажатия: показанный мог смениться до следующего тика
+    fun current() = totp(secret, System.currentTimeMillis().toULong()).code
+    val monospace = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace)
     OutlinedTextField(
-        value = pin + code.code,
+        value = code.code,
         onValueChange = {},
         readOnly = true,
-        label = { Text(stringResource(R.string.otp_label)) },
+        label = { Text(stringResource(R.string.totp_code)) },
         leadingIcon = {
             CircularProgressIndicator(progress = { code.remaining.toFloat() / code.period.toFloat() }, Modifier.size(22.dp), strokeWidth = 3.dp)
         },
         trailingIcon = {
+            IconAction(AppIcons.Copy, stringResource(R.string.copy_totp_code), "totp-code-copy") {
+                controller.notice(copySecret(context, resources.getString(R.string.clip_totp_code), current()))
+            }
+        },
+        supportingText = { Text(stringResource(R.string.otp_remaining, code.remaining.toInt()), Modifier.tag("totp-remaining")) },
+        singleLine = true,
+        textStyle = monospace,
+        modifier = Modifier.fillMaxWidth().tag("totp-code"),
+    )
+    CheckRow(combined, onCombinedChange, stringResource(R.string.password_plus_totp), "f-combined")
+    if (!combined) return
+    OutlinedTextField(
+        value = password + code.code,
+        onValueChange = {},
+        readOnly = true,
+        label = { Text(stringResource(R.string.password_plus_totp)) },
+        trailingIcon = {
             Row {
-                IconAction(if (shown) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (shown) R.string.hide_otp else R.string.show_otp), "otp-show") { shown = !shown }
-                IconAction(AppIcons.Copy, stringResource(R.string.copy_otp), "otp-copy") {
-                    controller.notice(copySecret(context, resources.getString(R.string.clip_password), pin + totp(secret, System.currentTimeMillis().toULong()).code))
+                IconAction(if (shown) AppIcons.VisibilityOff else AppIcons.Visibility, stringResource(if (shown) R.string.hide_otp else R.string.show_otp), "combined-show") { shown = !shown }
+                IconAction(AppIcons.Copy, stringResource(R.string.copy_otp), "combined-copy") {
+                    controller.notice(copySecret(context, resources.getString(R.string.clip_password), password + current()))
                 }
             }
         },
-        supportingText = { Text(stringResource(R.string.otp_remaining, code.remaining.toInt()), Modifier.tag("otp-remaining")) },
         singleLine = true,
         // моноширинный шрифт только для открытого пароля: скрытые точки выглядят как в остальных полях
-        textStyle = if (shown) LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace) else LocalTextStyle.current,
+        textStyle = if (shown) monospace else LocalTextStyle.current,
         visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth().tag("otp-value"),
+        modifier = Modifier.fillMaxWidth().tag("combined-value"),
+    )
+}
+
+/**
+ * Сканирование QR-кода с секретом TOTP. Кадры распознаются на устройстве и не сохраняются,
+ * в onResult попадает только текст, который ядро принимает как секрет.
+ */
+@Composable
+private fun QrScanDialog(onResult: (String) -> Unit, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val result by rememberUpdatedState(onResult)
+    var request by remember { mutableStateOf<SurfaceRequest?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        val found = Channel<String>(Channel.CONFLATED)
+        val executor = Executors.newSingleThreadExecutor()
+        val preview = Preview.Builder().build().apply { setSurfaceProvider { request = it } }
+        // по умолчанию анализ получает 640x480: мелкий QR-код на экране ноутбука распознается хуже
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setResolutionStrategy(ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                    .build(),
+            )
+            .build()
+            .apply { setAnalyzer(executor, QrAnalyzer { found.trySend(it) }) }
+        var provider: ProcessCameraProvider? = null
+        try {
+            provider = ProcessCameraProvider.awaitInstance(context)
+            val camera = if (provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+            provider.bindToLifecycle(lifecycleOwner, camera, preview, analysis)
+            // один и тот же код приходит с каждым кадром, проверяется только новый текст
+            var last: String? = null
+            for (text in found) {
+                if (text == last) continue
+                last = text
+                val error = scannedSecretProblem(resources, text)
+                problem = error
+                if (error == null) {
+                    result(text.trim())
+                    break
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            problem = resources.getString(R.string.camera_error, e.message ?: e.javaClass.simpleName)
+        } finally {
+            provider?.unbind(preview, analysis)
+            executor.shutdown()
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(stringResource(R.string.scan_qr)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(MaterialTheme.shapes.medium).background(Color.Black)) {
+                    // TextureView, а не SurfaceView: кадр обрезается по скругленной рамке и остается в окне диалога под FLAG_SECURE
+                    request?.let { CameraXViewfinder(it, Modifier.fillMaxSize(), implementationMode = ImplementationMode.EMBEDDED) }
+                }
+                Text(
+                    problem ?: stringResource(R.string.scan_qr_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (problem != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = if (problem != null) Modifier.tag("scan-error") else Modifier,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClose, Modifier.tag("scan-cancel")) { Text(stringResource(R.string.cancel)) } },
     )
 }
 

@@ -618,10 +618,15 @@ class VaultController(private val context: Context) {
             .setXmppDomain(domain)
             .setUsernameAndPassword(local, password)
             .setResource("android-${android.os.Build.MODEL.replace(' ', '-')}")
-            .setSecurityMode(if (settings.insecure) SecurityMode.disabled else SecurityMode.required)
+            .setSecurityMode(SecurityMode.required)
         try {
             // без адреса сервера Smack находит его по SRV-записям домена
-            if (settings.host.isNotBlank()) builder.setHostAddress(InetAddress.getByName(settings.host)).setPort(settings.port)
+            if (settings.host.isNotBlank()) {
+                val address = InetAddress.getByName(settings.host)
+                builder.setHostAddress(address).setPort(settings.port)
+                // тестовый Prosody работает без TLS, телефон подключается к нему через adb reverse на 127.0.0.1
+                if (BuildConfig.DEBUG && address.isLoopbackAddress) builder.setSecurityMode(SecurityMode.disabled)
+            }
             val connection = XMPPTCPConnection(builder.build())
             connection.setUseStreamManagement(true)
             connection.setUseStreamManagementResumption(true)

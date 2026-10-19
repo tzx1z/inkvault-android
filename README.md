@@ -9,9 +9,10 @@ The vault lives on your own XMPP server (for example, Prosody) in the PEP nodes 
 - Create a new vault or sign in to an existing one with a JID, XMPP password and master password.
 - Unlock with the master password or a fingerprint.
 - Searchable list with "All", "Favorites" and "Trash" filters and a tag tree.
-- Records: name, URL, username, password, notes, tags, favorite flag, password history.
+- Records: name, one or more URLs, username, password, TOTP secret, notes, tags, favorite flag, password history.
 - Password generator.
-- PIN + one-time code (TOTP) passwords: the full password is computed when shown, with a countdown to the next code.
+- One-time TOTP codes with a countdown to the next code. The secret is entered as base32 or an `otpauth://totp/...` link, or scanned from a QR code with the camera.
+- "Password + TOTP code" mode: the login password is the item password followed by the current code. It is computed when shown and is not stored.
 - Offline mode: the vault opens from an encrypted cache, and changes are sent once the connection is back.
 - Backup: encrypted export and import through the system file picker, compatible with the other clients.
 - Master password change, emptying the trash, deleting the whole vault.
@@ -24,9 +25,23 @@ On-device protection:
 - the vault locks after 15 minutes without user activity, including while the app is in the background;
 - a copied password is marked as sensitive and cleared from the clipboard after 45 seconds;
 - the quick unlock key is kept in Android Keystore and requires a fingerprint for every use;
-- the XMPP password is encrypted with an Android Keystore key.
+- the XMPP password is encrypted with an Android Keystore key;
+- the connection to the XMPP server always uses TLS;
+- the camera is used only to scan a QR code: access is requested on the first scan, frames are decoded on the device and are not saved.
 
 Requires Android 8.0 (API 26) or newer on an arm64-v8a or x86_64 device.
+
+## Screenshots
+
+| Sign in | New vault | Vault | Item with TOTP |
+|:-:|:-:|:-:|:-:|
+| <img src="screenshots/sign-in.jpg" width="200" alt="Sign-in screen"> | <img src="screenshots/new-vault.jpg" width="200" alt="Creating a new vault"> | <img src="screenshots/vault.jpg" width="200" alt="Vault item list"> | <img src="screenshots/item-totp.jpg" width="200" alt="Item with a TOTP code in the Password + TOTP code mode"> |
+
+| Password generator | Menu | Master password change |
+|:-:|:-:|:-:|
+| <img src="screenshots/generator.jpg" width="200" alt="Password generator"> | <img src="screenshots/menu.jpg" width="200" alt="Vault menu"> | <img src="screenshots/change-master-password.jpg" width="200" alt="Master password change"> |
+
+The screenshots were taken with a debug build without `FLAG_SECURE`, release builds do not allow screenshots.
 
 ## Installation
 
@@ -136,7 +151,7 @@ Without `GH_TOKEN` the tag pipeline stops after `release`. The GitHub `main` bra
 
 ## Tests
 
-The end-to-end test drives the app on a phone over USB with adb and uiautomator: vault creation, sync with another client, PIN + code, export and import, server recovery, master password change. The test server runs in podman, and the phone reaches it through `adb reverse`.
+The end-to-end test drives the app on a phone over USB with adb and uiautomator: vault creation, several URLs in an item, sync with another client, TOTP code and "Password + TOTP code", the QR scanner window, export and import, server recovery, master password change. Decoding a QR code with the camera is checked by hand. The test server runs in podman without TLS, and the phone reaches it through `adb reverse`: a debug build connects to a loopback server address without TLS, a release build always requires TLS.
 
 The test uses `@inkov-dev/inkvault-testkit`, the core WebAssembly build for Node and the `registry.gitlab.com/inkvault/inkvault-core/test-prosody` image of the same version. All three come from the GitLab registries of `inkvault-core` and require a token with the `read_api` and `read_registry` scopes.
 
@@ -167,6 +182,7 @@ python3 -I tools/licenses.py
 | `tools/licenses.py` | dependency license check |
 | `.gitlab-ci.yml` | build and release pipeline |
 | `art/` | icon and logo sources in SVG |
+| `screenshots/` | screenshots for this README |
 
 ## License
 

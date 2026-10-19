@@ -20,7 +20,6 @@ import xml.etree.ElementTree as ET
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 GRADLE_HOME = os.environ.get("GRADLE_USER_HOME") or os.path.expanduser("~/.gradle")
 GRADLE_CACHE = os.path.join(GRADLE_HOME, "caches/modules-2/files-2.1")
-POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 
 # Лицензии, совместимые с AGPL-3.0: код под ними можно распространять в составе программы под AGPL.
 # MPL-2.0 совместима благодаря разделу 3.3, пока автор не пометил код "Incompatible With Secondary
@@ -102,13 +101,16 @@ def pom_licenses(group: str, artifact: str, version: str, depth: int = 0) -> lis
     if not poms or depth > 5:
         return []
     root = ET.parse(poms[0]).getroot()
+    # в старых POM нет пространства имен Maven (javax.inject:1), поэтому теги сравниваются без него
+    for node in root.iter():
+        node.tag = node.tag.rpartition("}")[2]
     licenses = [
-        maven_license(item.findtext("m:name", "", POM_NS), item.findtext("m:url", "", POM_NS))
-        for item in root.findall("m:licenses/m:license", POM_NS)
+        maven_license(item.findtext("name", ""), item.findtext("url", ""))
+        for item in root.findall("licenses/license")
     ]
-    parent = root.find("m:parent", POM_NS)
+    parent = root.find("parent")
     if not licenses and parent is not None:
-        get = lambda tag: parent.findtext(f"m:{tag}", "", POM_NS)
+        get = lambda tag: parent.findtext(tag, "")
         return pom_licenses(get("groupId"), get("artifactId"), get("version"), depth + 1)
     return licenses
 

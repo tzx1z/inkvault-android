@@ -14,13 +14,13 @@ import org.json.JSONObject
 // выше 10000 записей клиент не проверялся
 val MAX_ITEMS_RANGE = 1..10000
 
-data class Settings(val jid: String, val host: String, val port: Int, val insecure: Boolean) {
-    fun toJson(): String = JSONObject()
-        .put("jid", jid).put("host", host).put("port", port).put("insecure", insecure).toString()
+// ключ insecure в сохраненных настройках не читается: подключение к серверу всегда идет с TLS
+data class Settings(val jid: String, val host: String, val port: Int) {
+    fun toJson(): String = JSONObject().put("jid", jid).put("host", host).put("port", port).toString()
 
     companion object {
         fun fromJson(json: String) = JSONObject(json).let {
-            Settings(it.getString("jid"), it.optString("host"), it.optInt("port", 5222), it.optBoolean("insecure"))
+            Settings(it.getString("jid"), it.optString("host"), it.optInt("port", 5222))
         }
     }
 }
