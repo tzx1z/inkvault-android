@@ -111,9 +111,11 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.LinkAnnotation
@@ -518,7 +520,8 @@ private fun VaultScreen(controller: VaultController, activity: Activity) {
                     ) { Text(stringResource(R.string.purge_trash), color = MaterialTheme.colorScheme.error) }
                 }
                 items(visible, key = { it.id }) { item ->
-                    val details = listOf(item.field("username"), item.field("url")).filter { it.isNotEmpty() }.joinToString(" · ")
+                    // url бывает пустым при заполненном urls, если запись правил другой клиент
+                    val details = listOf(item.field("username"), item.urls.firstOrNull().orEmpty()).filter { it.isNotEmpty() }.joinToString(" · ")
                     ListItem(
                         headlineContent = { Text(item.field("name").ifEmpty { untitled }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         modifier = Modifier.clickable { editing = item.id }.tag("item"),
@@ -841,6 +844,9 @@ private fun BackupDialog(controller: VaultController, onClose: () -> Unit) {
 
 private const val NEW = "new"
 
+// combined - режим "Пароль + код TOTP" в форме. password_mode в fields не входит: он пишется только при смене режима
+private data class Draft(val fields: Map<String, String>, val tags: List<String>, val combined: Boolean)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditorScreen(controller: VaultController, item: Item?, navigate: (String?) -> Unit) {
@@ -874,18 +880,42 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
     val secretValid = secret.isNotEmpty() && secretError == null
     // без рабочего секрета режим выключен, но выбор остается: он вернется, когда секрет исправят
     val combinedOn = combined && secretValid
+    // значения формы в том виде, в каком их сохраняет Save
+    fun collect(): Draft {
+        // вставка в однострочное поле может принести перевод строки, а он разделяет адреса в urls
+        val urlList = urls.flatMap { it.lines() }.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val fields = v + mapOf("url" to urlList.firstOrNull().orEmpty(), "urls" to urlList.drop(1).joinToString("\n"), "totp" to secret)
+        val tagList = tags.split(",").map { it.trim().trim('/') }.filter { it.isNotEmpty() } + if (favorite) listOf(FAVORITE) else emptyList()
+        return Draft(fields, tagList, combinedOn)
+    }
+    // у существующей записи id после сохранения тот же и remember не сбрасывается, поэтому Save обновляет saved сам
+    var saved by remember(item?.id) { mutableStateOf(collect()) }
+    // запись в корзине сохранить нельзя, уведомления у нее нет
+    val unsaved = !deleted && collect() != saved
 
     Scaffold(topBar = {
         TopAppBar(
             title = {
                 val name = v["name"].orEmpty().ifEmpty { stringResource(R.string.untitled) }
-                Text(
-                    when {
-                        item == null -> stringResource(R.string.new_item)
-                        deleted -> stringResource(R.string.in_trash, name)
-                        else -> name
-                    },
-                )
+                Column {
+                    Text(
+                        when {
+                            item == null -> stringResource(R.string.new_item)
+                            deleted -> stringResource(R.string.in_trash, name)
+                            else -> name
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (unsaved) {
+                        Text(
+                            stringResource(R.string.unsaved_changes),
+                            Modifier.tag("unsaved").semantics { liveRegion = LiveRegionMode.Polite },
+                            color = MaterialTheme.colorScheme.tertiary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             },
             navigationIcon = { IconAction(AppIcons.ArrowBack, stringResource(R.string.back), "back") { navigate(null) } },
         )
@@ -959,17 +989,16 @@ private fun EditorScreen(controller: VaultController, item: Item?, navigate: (St
                             controller.notice(R.string.not_saved, secretError)
                             return@Button
                         }
-                        // вставка в однострочное поле может принести перевод строки, а он разделяет адреса в urls
-                        val urlList = urls.flatMap { it.lines() }.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-                        var fields = v + mapOf("url" to urlList.firstOrNull().orEmpty(), "urls" to urlList.drop(1).joinToString("\n"), "totp" to secret)
+                        val draft = collect()
+                        var fields = draft.fields
                         // режим пишется только при смене: незнакомое значение от более нового клиента не затирается
-                        if (combinedOn != (item?.field(PASSWORD_MODE) == PIN_TOTP)) fields = fields + (PASSWORD_MODE to if (combinedOn) PIN_TOTP else "")
-                        val tagList = tags.split(",").map { it.trim().trim('/') }.filter { it.isNotEmpty() } + if (favorite) listOf(FAVORITE) else emptyList()
+                        if (draft.combined != (item?.field(PASSWORD_MODE) == PIN_TOTP)) fields = fields + (PASSWORD_MODE to if (draft.combined) PIN_TOTP else "")
                         if (item == null) {
-                            controller.create(fields.filterValues { it.isNotEmpty() }, tagList) { id -> navigate(id) }
+                            controller.create(fields.filterValues { it.isNotEmpty() }, draft.tags) { id -> navigate(id) }
                         } else {
-                            controller.update(item.id, fields, tagList)
+                            controller.update(item.id, fields, draft.tags)
                         }
+                        saved = draft
                         controller.notice(if (item == null) R.string.item_created else R.string.item_saved)
                     }, Modifier.tag("save")) { Text(stringResource(R.string.save)) }
                 }

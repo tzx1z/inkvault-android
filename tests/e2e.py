@@ -308,6 +308,20 @@ def main() -> int:
     tap(text="github.com")
     second = field_text("f-url-1")
     report(found and second == "gist.github.com", "второй адрес записи сохранен и находится поиском", second)
+    # уведомление о несохраненных изменениях в шапке карточки
+    type_into("f-username", "2")
+    edited = find(dump(), "unsaved") is not None
+    clear_field("f-username", 1)
+    reverted = find(dump(), "unsaved") is None
+    type_into("f-username", "2")
+    reveal("save")
+    tap("save")
+    saved = find(dump(), "unsaved") is None
+    report(
+        edited and reverted and saved,
+        "несохраненные изменения: уведомление после правки, скрыто после возврата значения и после сохранения",
+        f"после правки: {edited}, после возврата скрыто: {reverted}, после сохранения скрыто: {saved}",
+    )
     tap("back")
 
     subprocess.run(["node", "vault.mjs", "add"], cwd=VAULT_CLI, check=True, capture_output=True, env={**os.environ, "MASTER_PASSWORD": MASTER})

@@ -151,7 +151,7 @@ Without `GH_TOKEN` the tag pipeline stops after `release`. The GitHub `main` bra
 
 ## Tests
 
-The end-to-end test drives the app on a phone over USB with adb and uiautomator: vault creation, several URLs in an item, sync with another client, TOTP code and "Password + TOTP code", the QR scanner window, export and import, server recovery, master password change. Decoding a QR code with the camera is checked by hand. The test server runs in podman without TLS, and the phone reaches it through `adb reverse`: a debug build connects to a loopback server address without TLS, a release build always requires TLS.
+The end-to-end test drives the app on a phone over USB with adb and uiautomator: vault creation, several URLs in an item, the unsaved changes notice in the item editor, sync with another client, TOTP code and "Password + TOTP code", the QR scanner window, export and import, server recovery, master password change. Decoding a QR code with the camera is checked by hand. The test server runs in podman without TLS, and the phone reaches it through `adb reverse`: a debug build connects to a loopback server address without TLS, a release build always requires TLS.
 
 The test uses `@inkov-dev/inkvault-testkit`, the core WebAssembly build for Node and the `registry.gitlab.com/inkvault/inkvault-core/test-prosody` image of the same version. All three come from the GitLab registries of `inkvault-core` and require a token with the `read_api` and `read_registry` scopes.
 

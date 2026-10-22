@@ -132,6 +132,7 @@
 
     <string name="new_item">New item</string>
     <string name="in_trash">%1$s (in trash)</string>
+    <string name="unsaved_changes">Unsaved changes</string>
     <string name="back">Back</string>
     <string name="field_name">Name</string>
     <string name="field_url">URL</string>

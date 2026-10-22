@@ -131,6 +131,7 @@
 
     <string name="new_item">Новая запись</string>
     <string name="in_trash">%1$s (в корзине)</string>
+    <string name="unsaved_changes">Есть несохраненные изменения</string>
     <string name="back">Назад</string>
     <string name="field_name">Название</string>
     <string name="field_url">Адрес</string>
